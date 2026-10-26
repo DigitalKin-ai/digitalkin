@@ -1,17 +1,17 @@
 """This module contains the abstract base class for storage strategies."""
 
 import asyncio
-import datetime
+import datetime as dt
 from abc import ABC, abstractmethod
 from typing import Any, Literal, TypeGuard
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from digitalkin.logger import logger
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.base_strategy import BaseStrategy
-from digitalkin.services.storage.exceptions import StorageServiceError
 
 
 class StorageRecord(BaseModel):
@@ -26,8 +26,8 @@ class StorageRecord(BaseModel):
         description="Read-access scope of this record (UNSPECIFIED = storage-service default)",
     )
     data: BaseModel = Field(..., description="The typed payload of this record")
-    creation_date: datetime.datetime | None = Field(default=None, description="When this record was first created")
-    update_date: datetime.datetime | None = Field(default=None, description="When this record was last modified")
+    creation_date: dt.datetime | None = Field(default=None, description="When this record was first created")
+    update_date: dt.datetime | None = Field(default=None, description="When this record was last modified")
     storage_id: str = Field(
         default="", description="Service-assigned `storage:<id>` for this record; empty until stored"
     )
@@ -215,13 +215,12 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Delete all records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name for the record type
             context: Owner context for which to wipe records.
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
@@ -377,7 +376,8 @@ class StorageStrategy(BaseStrategy, ABC):
             collection: The unique name for the record type
             context: Which context to list (default: "mission"). "user"/"organization"
                 list across an owner and require `owner_id`.
-            visibilities: Optional read-access scopes to filter by (None = no filter).
+            visibilities: Optional read-access scopes to filter by (None = no filter). ``UNSPECIFIED``
+                constrains nothing — every stored record carries a concrete scope — so it is dropped.
             record_id: Restrict to this record id; empty means no filter.
             limit: Max records to return; 0 means the service default (20, capped at 100).
             offset: Records to skip before returning results.
@@ -385,32 +385,34 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A list of storage records under the resolved context.
         """
+        if visibilities and Visibility.UNSPECIFIED in visibilities:
+            # The storage service refuses UNSPECIFIED in a visibility filter (INVALID_ARGUMENT).
+            logger.info(
+                "[VALIDATE VISFILTER] UNSPECIFIED dropped from the visibility filter: collection=%s filter=%s",
+                collection,
+                visibilities,
+            )  # TODO(validate): remove after prod validation
+            visibilities = [v for v in visibilities if v is not Visibility.UNSPECIFIED]
         return await self._list(collection, self._resolve_context(context), visibilities, record_id, limit, offset)
 
-    async def remove_collection(
-        self, collection: str, context: Context = Context.MISSIONS, record_id: str = ""
-    ) -> bool:
+    async def remove_collection(self, collection: str, context: Context = Context.MISSIONS) -> bool:
         """Wipe a collection clean under the given scope.
+
+        Use ``remove`` to delete a single record.
 
         Args:
             collection: The unique name for the record type
             context: Which context the records live under (default: "mission").
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
         """
         ctx = self._resolve_context(context)
-        result = await self._remove_collection(collection, ctx, record_id)
+        result = await self._remove_collection(collection, ctx)
         if result:
-            # A record_id names one exact lock; without it the whole collection's locks go.
-            # Not a startswith sweep in the first case, or "rec1" would evict "rec10" too.
-            if record_id:
-                self._record_locks.pop(f"{ctx}|{collection}:{record_id}", None)
-            else:
-                prefix = f"{ctx}|{collection}:"
-                for key in [k for k in self._record_locks if k.startswith(prefix)]:
-                    self._record_locks.pop(key, None)
+            prefix = f"{ctx}|{collection}:"
+            for key in [k for k in self._record_locks if k.startswith(prefix)]:
+                self._record_locks.pop(key, None)
         return result
 
     async def upsert(
@@ -424,9 +426,8 @@ class StorageStrategy(BaseStrategy, ABC):
     ) -> StorageRecord:
         """Insert or update a record atomically under the given scope.
 
-        If a record with the given collection/record_id exists under that
-        context it is updated; otherwise a new record is created. The operation
-        is protected by a per-record lock to prevent races.
+        The update is tried first; when it finds no record, a new one is created.
+        The operation is protected by a per-record lock to prevent races.
 
         Args:
             collection: The unique name for the record type
@@ -441,7 +442,7 @@ class StorageStrategy(BaseStrategy, ABC):
 
         Raises:
             ValueError: If the data type is invalid or if validation fails
-            StorageServiceError: If update of an existing record fails unexpectedly
+            StorageServiceError: If the create after a missed update fails (gRPC backend).
         """
         if not self._is_valid_data_type_name(data_type.value):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
@@ -449,11 +450,10 @@ class StorageStrategy(BaseStrategy, ABC):
         validated_data = self._validate_data(collection, data)
         ctx = self._resolve_context(context)
         async with self._record_lock(ctx, collection, record_id):
-            if await self._read(collection, record_id, ctx):
-                updated = await self._update(collection, record_id, validated_data, ctx, visibility)
-                if updated is None:
-                    msg = f"Update failed for existing record '{collection}:{record_id}'"
-                    raise StorageServiceError(msg)
+            updated = await self._update(collection, record_id, validated_data, ctx, visibility)
+            if updated is not None:
                 return updated
+            # TODO(validate): UPSERT-UPDATE-FIRST upsert updates first and creates only on a miss
+            logger.info("[VALIDATE UPSERT-UPDATE-FIRST] no record to update, creating %s:%s", collection, record_id)
             record = self._create_storage_record(collection, record_id, validated_data, data_type, ctx, visibility)
             return await self._store(record)

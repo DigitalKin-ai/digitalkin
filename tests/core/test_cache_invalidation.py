@@ -5,7 +5,7 @@ Covers:
 - BaseModule.clear_shared() dict swap
 - Bulkhead maxsize guard and remove()
 - ModuleServicer invalidation methods
-- GatewayServicer.SendSignal routing for INVALIDATE_* actions
+- GatewayServicer.SendSignal routing for InvalidateSignal scopes
 - ModuleServer cache handler dispatch
 """
 
@@ -13,6 +13,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_enums_pb2, gateway_messages_pb2
+
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -190,7 +193,13 @@ class TestModuleServicerInvalidation:
 
 
 class TestGatewayServicerCacheSignals:
-    """SendSignal routes INVALIDATE_* to cache_handler callback."""
+    """SendSignal routes an InvalidateSignal to the cache_handler callback."""
+
+    @staticmethod
+    def _invalidate(scope: str) -> gateway_dto_pb2.SendSignalRequest:
+        return gateway_dto_pb2.SendSignalRequest(
+            invalidate=gateway_messages_pb2.InvalidateSignal(scope=gateway_enums_pb2.CacheScope.Value(scope)),
+        )
 
     @pytest.fixture
     def gateway(self) -> "GatewayServicer":
@@ -206,33 +215,26 @@ class TestGatewayServicerCacheSignals:
 
     @pytest.mark.asyncio
     async def test_invalidate_all_calls_handler_and_publishes(self, gateway) -> None:
-        """INVALIDATE_ALL dispatches to cache_handler AND publishes to signal_ch:_global_."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        request = gateway_pb2.ClientSignalRequest(
-            action=gateway_pb2.SignalAction.Value("INVALIDATE_ALL"),
-        )
-        resp = await gateway.SendSignal(request, MagicMock())
+        """ALL dispatches to cache_handler AND publishes to signal_ch:_global_."""
+        resp = await gateway.SendSignal(self._invalidate("ALL"), MagicMock())
 
         assert resp.success is True
-        gateway._cache_handler.assert_awaited_once_with("INVALIDATE_ALL", "")
+        gateway._cache_handler.assert_awaited_once_with("ALL", "")
         gateway._redis_client.publish.assert_awaited_once()
         channel, _payload = gateway._redis_client.publish.await_args.args
         assert channel == "signal_ch:_global_"
 
     @pytest.mark.asyncio
     async def test_invalidate_setup_propagates_setup_id(self, gateway) -> None:
-        """INVALIDATE_SETUP with task_id=s1 forwards setup_id to cache_handler + payload."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        request = gateway_pb2.ClientSignalRequest(
-            action=gateway_pb2.SignalAction.Value("INVALIDATE_SETUP"),
-            task_id="s1",
-        )
-        resp = await gateway.SendSignal(request, MagicMock())
+        """SETUP with x-setup-id=s1 forwards setup_id to cache_handler + payload."""
+        token = RequestContext.bind(setup_id="s1")
+        try:
+            resp = await gateway.SendSignal(self._invalidate("SETUP"), MagicMock())
+        finally:
+            RequestContext.reset(token)
 
         assert resp.success is True
-        gateway._cache_handler.assert_awaited_once_with("INVALIDATE_SETUP", "s1")
+        gateway._cache_handler.assert_awaited_once_with("SETUP", "s1")
         channel, payload = gateway._redis_client.publish.await_args.args
         decoded = json.loads(payload)
         assert decoded["action"] == "invalidate_setup"
@@ -240,30 +242,21 @@ class TestGatewayServicerCacheSignals:
 
     @pytest.mark.asyncio
     async def test_invalidate_shared_calls_handler(self, gateway) -> None:
-        """INVALIDATE_SHARED dispatches to cache_handler with empty setup_id."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        request = gateway_pb2.ClientSignalRequest(
-            action=gateway_pb2.SignalAction.Value("INVALIDATE_SHARED"),
-        )
-        resp = await gateway.SendSignal(request, MagicMock())
+        """SHARED dispatches to cache_handler with empty setup_id."""
+        resp = await gateway.SendSignal(self._invalidate("SHARED"), MagicMock())
 
         assert resp.success is True
-        gateway._cache_handler.assert_awaited_once_with("INVALIDATE_SHARED", "")
+        gateway._cache_handler.assert_awaited_once_with("SHARED", "")
 
     @pytest.mark.asyncio
     async def test_invalidate_without_handler_still_publishes(self) -> None:
-        """INVALIDATE_* without cache_handler still broadcasts to peers (best-effort)."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+        """An invalidation without cache_handler still broadcasts to peers (best-effort)."""
         from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 
         redis_client = MagicMock()
         redis_client.publish = AsyncMock()
         gw = GatewayServicer(redis_client=redis_client, cache_handler=None)
-        request = gateway_pb2.ClientSignalRequest(
-            action=gateway_pb2.SignalAction.Value("INVALIDATE_ALL"),
-        )
-        resp = await gw.SendSignal(request, MagicMock())
+        resp = await gw.SendSignal(self._invalidate("ALL"), MagicMock())
 
         # Local handler missing — but the broadcast still fires so peers can invalidate.
         assert resp.success is True
@@ -271,18 +264,12 @@ class TestGatewayServicerCacheSignals:
 
     @pytest.mark.asyncio
     async def test_cancel_still_uses_task_flow(self, gateway) -> None:
-        """CANCEL action still requires task_id and session lookup."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+        """A cancel signal requires a task_id and a session lookup, never the cache_handler."""
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="test-task-id"))
 
-        request = gateway_pb2.ClientSignalRequest(
-            task_id="test-task-id",
-            action=gateway_pb2.SignalAction.Value("CANCEL"),
-        )
-        context = MagicMock()
+        resp = await gateway.SendSignal(request, MagicMock())
 
-        resp = await gateway.SendSignal(request, context)
-
-        # CANCEL goes through task flow, not cache_handler
+        assert resp.success is False  # no session registered for test-task-id
         gateway._cache_handler.assert_not_awaited()
 
 
@@ -296,7 +283,7 @@ class TestModuleServerCacheHandlers:
 
     @pytest.mark.asyncio
     async def test_invalidate_all_full_wipes_both_caches(self) -> None:
-        """INVALIDATE_ALL bypasses the scoped handlers and wipes module-servicer caches directly."""
+        """ALL bypasses the scoped handlers and wipes module-servicer caches directly."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -309,7 +296,7 @@ class TestModuleServerCacheHandlers:
         server._invalidate_all = ModuleServer._invalidate_all.__get__(server)
         server._handle_cache_invalidation = ModuleServer._handle_cache_invalidation.__get__(server)
 
-        await server._handle_cache_invalidation("INVALIDATE_ALL")
+        await server._handle_cache_invalidation("ALL")
 
         server.module_servicer.invalidate_setup_cache.assert_called_once()
         server.module_servicer.invalidate_tool_cache.assert_called_once()
@@ -319,7 +306,7 @@ class TestModuleServerCacheHandlers:
 
     @pytest.mark.asyncio
     async def test_invalidate_setup_scoped_pops_only_target_setup_id(self) -> None:
-        """INVALIDATE_SETUP with a setup_id pops only that key; siblings untouched."""
+        """SETUP with a setup_id pops only that key; siblings untouched."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -337,7 +324,7 @@ class TestModuleServerCacheHandlers:
 
     @pytest.mark.asyncio
     async def test_invalidate_tools_scoped_pops_only_target_setup_id(self) -> None:
-        """INVALIDATE_TOOLS with a setup_id pops only that key; siblings untouched."""
+        """TOOLS with a setup_id pops only that key; siblings untouched."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -355,7 +342,7 @@ class TestModuleServerCacheHandlers:
     async def test_invalidate_setup_without_setup_id_is_skipped(
         self, caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """INVALIDATE_SETUP without a setup_id logs a warning and leaves the cache intact."""
+        """SETUP without a setup_id logs a warning and leaves the cache intact."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -371,7 +358,7 @@ class TestModuleServerCacheHandlers:
 
     @pytest.mark.asyncio
     async def test_invalidate_tools_without_setup_id_is_skipped(self) -> None:
-        """INVALIDATE_TOOLS without a setup_id leaves the cache intact (scoped-only policy)."""
+        """TOOLS without a setup_id leaves the cache intact (scoped-only policy)."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -385,7 +372,7 @@ class TestModuleServerCacheHandlers:
 
     @pytest.mark.asyncio
     async def test_invalidate_shared_calls_clear_shared(self) -> None:
-        """INVALIDATE_SHARED calls module_class.clear_shared."""
+        """SHARED calls module_class.clear_shared."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
@@ -398,12 +385,53 @@ class TestModuleServerCacheHandlers:
         server.module_class.clear_shared.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_action_is_noop(self) -> None:
-        """Unknown action name does nothing, no error."""
+    @pytest.mark.parametrize(
+        ("scope", "method", "args"),
+        [
+            ("ALL", "_invalidate_all", ()),
+            ("CHANNELS", "_invalidate_channels", ()),
+            ("MODELS", "_invalidate_models", ()),
+            ("SETUP", "_invalidate_setup", ("s1",)),
+            ("TOOLS", "_invalidate_tools", ("s1",)),
+            ("SHARED", "_invalidate_shared", ()),
+        ],
+    )
+    async def test_every_cache_scope_dispatches_to_its_handler(self, scope: str, method: str, args: tuple) -> None:
+        """Each CacheScope name reaches exactly its ``_invalidate_*``; only SETUP / TOOLS get the setup_id."""
         from digitalkin.grpc_servers.module_server import ModuleServer
 
         server = MagicMock(spec=ModuleServer)
+        handlers = {
+            name: AsyncMock()
+            for name in (
+                "_invalidate_all",
+                "_invalidate_channels",
+                "_invalidate_models",
+                "_invalidate_setup",
+                "_invalidate_tools",
+                "_invalidate_shared",
+            )
+        }
+        for name, handler in handlers.items():
+            vars(server)[name] = handler
         server._handle_cache_invalidation = ModuleServer._handle_cache_invalidation.__get__(server)
 
-        # Should not raise
-        await server._handle_cache_invalidation("INVALIDATE_NONEXISTENT")
+        await server._handle_cache_invalidation(scope, "s1")
+
+        handlers.pop(method).assert_awaited_once_with(*args)
+        for other in handlers.values():
+            other.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scope", ["CACHE_SCOPE_UNSPECIFIED", "INVALIDATE_ALL", "NONEXISTENT"])
+    async def test_unknown_scope_is_noop(self, scope: str) -> None:
+        """An unknown scope name (legacy ``INVALIDATE_*`` included) does nothing, no error."""
+        from digitalkin.grpc_servers.module_server import ModuleServer
+
+        server = MagicMock(spec=ModuleServer)
+        server._invalidate_all = AsyncMock()
+        server._handle_cache_invalidation = ModuleServer._handle_cache_invalidation.__get__(server)
+
+        await server._handle_cache_invalidation(scope)
+
+        server._invalidate_all.assert_not_awaited()

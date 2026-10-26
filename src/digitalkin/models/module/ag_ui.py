@@ -28,11 +28,6 @@ from ag_ui.core.events import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
-    ThinkingEndEvent,
-    ThinkingStartEvent,
-    ThinkingTextMessageContentEvent,
-    ThinkingTextMessageEndEvent,
-    ThinkingTextMessageStartEvent,
     ToolCallArgsEvent,
     ToolCallChunkEvent,
     ToolCallEndEvent,
@@ -82,27 +77,6 @@ class AgUiTextMessageChunkOutput(AgUiDataTrigger):
 
     protocol: Literal["agui_text_message_chunk"] = "agui_text_message_chunk"
     event: TextMessageChunkEvent = Field(..., description="AG-UI TextMessageChunk event payload")
-
-
-class AgUiThinkingTextMessageStartOutput(AgUiDataTrigger):
-    """AG-UI ThinkingTextMessageStart event - signals start of internal thinking."""
-
-    protocol: Literal["agui_thinking_text_message_start"] = "agui_thinking_text_message_start"
-    event: ThinkingTextMessageStartEvent = Field(..., description="AG-UI ThinkingTextMessageStart event payload")
-
-
-class AgUiThinkingTextMessageContentOutput(AgUiDataTrigger):
-    """AG-UI ThinkingTextMessageContent event - carries a thinking text delta chunk."""
-
-    protocol: Literal["agui_thinking_text_message_content"] = "agui_thinking_text_message_content"
-    event: ThinkingTextMessageContentEvent = Field(..., description="AG-UI ThinkingTextMessageContent event payload")
-
-
-class AgUiThinkingTextMessageEndOutput(AgUiDataTrigger):
-    """AG-UI ThinkingTextMessageEnd event - signals end of internal thinking."""
-
-    protocol: Literal["agui_thinking_text_message_end"] = "agui_thinking_text_message_end"
-    event: ThinkingTextMessageEndEvent = Field(..., description="AG-UI ThinkingTextMessageEnd event payload")
 
 
 class AgUiToolCallStartOutput(AgUiDataTrigger):
@@ -266,20 +240,6 @@ class AgUiReasoningEncryptedValueOutput(AgUiDataTrigger):
     event: ReasoningEncryptedValueEvent = Field(..., description="AG-UI ReasoningEncryptedValue event payload")
 
 
-class AgUiThinkingStartOutput(AgUiDataTrigger):
-    """AG-UI ThinkingStart event - signals start of a high-level thinking step."""
-
-    protocol: Literal["agui_thinking_start"] = "agui_thinking_start"
-    event: ThinkingStartEvent = Field(..., description="AG-UI ThinkingStart event payload")
-
-
-class AgUiThinkingEndOutput(AgUiDataTrigger):
-    """AG-UI ThinkingEnd event - signals end of a high-level thinking step."""
-
-    protocol: Literal["agui_thinking_end"] = "agui_thinking_end"
-    event: ThinkingEndEvent = Field(..., description="AG-UI ThinkingEnd event payload")
-
-
 class AgUiRawEventOutput(AgUiDataTrigger):
     """AG-UI RawEvent event - passes through a raw/untyped event payload."""
 
@@ -300,9 +260,6 @@ AgUiEventOutput: TypeAlias = Annotated[
         | AgUiTextMessageContentOutput
         | AgUiTextMessageEndOutput
         | AgUiTextMessageChunkOutput
-        | AgUiThinkingTextMessageStartOutput
-        | AgUiThinkingTextMessageContentOutput
-        | AgUiThinkingTextMessageEndOutput
         | AgUiToolCallStartOutput
         | AgUiToolCallArgsOutput
         | AgUiToolCallEndOutput
@@ -326,8 +283,6 @@ AgUiEventOutput: TypeAlias = Annotated[
         | AgUiReasoningMessageChunkOutput
         | AgUiReasoningEndOutput
         | AgUiReasoningEncryptedValueOutput
-        | AgUiThinkingStartOutput
-        | AgUiThinkingEndOutput
         | AgUiRawEventOutput
         | AgUiCustomEventOutput
     ),
@@ -339,13 +294,16 @@ class AgUiOutput(DataModel):
     """Output model for the Template module with discriminated union."""
 
     def model_dump(self, **kwargs: object) -> dict[str, object]:
-        """Serialize with camelCase aliases and exclude None fields by default.
+        """Serialize with camelCase aliases.
+
+        No ``exclude_none``: the AG-UI 1.0 models omit an optional field that has no value
+        themselves and keep the nulls that carry meaning (``CUSTOM.value``, a JSON Patch
+        ``value``, data inside state or activity content), which ``exclude_none`` would strip.
 
         Returns:
-            Serialized model dictionary with camelCase keys and no null values.
+            Serialized model dictionary with camelCase keys.
         """
         kwargs.setdefault("by_alias", True)
-        kwargs.setdefault("exclude_none", True)
         return super().model_dump(**kwargs)  # type: ignore[arg-type]
 
     root: AgUiEventOutput

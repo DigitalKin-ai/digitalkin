@@ -1,187 +1,133 @@
+<!-- --8<-- [start:intro] -->
 # DigitalKin Python SDK
 
-[![CI](https://github.com/DigitalKin-ai/digitalkin/actions/workflows/ci.yml/badge.svg)](https://github.com/DigitalKin-ai/digitalkin/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/digitalkin.svg)](https://pypi.org/project/digitalkin/)
-[![Python Version](https://img.shields.io/pypi/pyversions/digitalkin.svg)](https://pypi.org/project/digitalkin/)
-[![License](https://img.shields.io/github/license/DigitalKin-ai/digitalkin)](https://github.com/DigitalKin-ai/digitalkin/blob/main/LICENSE)
+`digitalkin` is the Python SDK for writing modules (tools and archetypes) of the DigitalKin agentic mesh.
+You declare typed Pydantic contracts and trigger handlers; the SDK serves them over gRPC.
+Each module process embeds a gateway that persists outputs to Redis Streams and pushes them to the consumer.
 
-The DigitalKin Python SDK for building and managing modules within the
-DigitalKin agentic mesh. Create custom **Tools** and **Archetypes** that
-communicate over gRPC, register with a service mesh, and scale independently.
+**What it is not**
 
-## Features
+- Not a standalone gateway process: the gateway runs inside each module server.
+- Not a registry server: modules register with an external registry in remote mode.
+- Not a client library: the consumer calls `StartStream` and hosts the dial-back `Stream` endpoint itself.
+- Not the wire contract: protos come from the `agentic-mesh-protocol` package.
 
-- **Async-native gRPC module system** — every module is a gRPC server built on
-  `grpcio` with full async support
-- **Typed module contracts** — Pydantic models for Input, Output, Setup, and
-  Secret schemas with protocol-based trigger dispatch
-- **Module-to-module communication** — tools and archetypes discover each other
-  via the registry and exchange requests over gRPC
-- **Tool resolution** — archetypes dynamically resolve and invoke tool modules
-  at runtime
-- **Admission queue & backpressure** — built-in request admission with
-  configurable concurrency limits
-- **Healthcheck protocols** — automatic ping, services, and status healthcheck
-  triggers registered on every module
-- **Profiling** — optional `[profiling]` extra with asyncio-inspector,
-  pyinstrument, viztracer, and yappi
-- **Batched history writes** — efficient storage writes for conversation history
-- **Redis Streams** — durable message passing, crash recovery, and reconnection
+## Install
 
-## Installation
+`uv add digitalkin` or `pip install digitalkin` (Python 3.10+); add `[agno]` for the Agno integration.
+Extras: `agno` (Agno integration), `performance` (uvloop), `profiling`.
 
-```bash
-# With uv (recommended)
-uv add digitalkin
+## Quick start
 
-# With pip
-pip install digitalkin
-```
-
-**Optional extras:**
-
-```bash
-# Async profiling tools
-uv add "digitalkin[profiling]"
-
-# uvloop for faster event loop
-uv add "digitalkin[performance]"
-```
-
-## Quick Start
-
-### 1. Define your models
+Files: `echo_module.py`, `server.py`, `triggers/__init__.py`, `triggers/echo_trigger.py` (discovery imports `*_trigger.py`).
 
 ```python
+# echo_module.py
+from typing import Any, ClassVar, Literal
 from pydantic import BaseModel
-from digitalkin.models.module.base_types import DataModel, DataTrigger
+from digitalkin import ModuleContext, ToolModule
+from digitalkin.models.module import DataModel, DataTrigger, SetupModel
+from digitalkin.utils.package_discover import ModuleDiscoverer
 
+class EchoIn(DataTrigger):
+    protocol: Literal["message"] = "message"
+    text: str
 
-class MessageInput(DataTrigger):
-    protocol: str = "message"
-    content: str
-
-
-class InputModel(DataModel[MessageInput]):
-    root: MessageInput
-
-
-class MessageOutput(DataTrigger):
-    protocol: str = "message"
+class EchoOut(DataTrigger):
+    protocol: Literal["message"] = "message"
     reply: str
 
+class EchoInput(DataModel[EchoIn]):
+    root: EchoIn
 
-class OutputModel(DataModel[MessageOutput]):
-    root: MessageOutput
+class EchoOutput(DataModel[EchoOut]):
+    root: EchoOut
+
+class EchoSetup(SetupModel):
+    prefix: str = "echo: "
+
+class EchoModule(ToolModule[EchoInput, EchoOutput, EchoSetup, BaseModel]):
+    name = "EchoModule"
+    description = "Echoes the input text."
+    input_format = EchoInput
+    output_format = EchoOutput
+    setup_format = EchoSetup
+    secret_format = BaseModel  # no secrets
+    metadata: ClassVar[dict[str, Any]] = {"module_id": "modules:echo", "version": "0.1.0"}
+    services_config_params: ClassVar[dict[str, Any]] = {"storage": {"config": {}}, "cost": {"config": {}}}
+    triggers_discoverer = ModuleDiscoverer(packages=["triggers"])
+
+    async def initialize(self, context: ModuleContext, setup_data: EchoSetup) -> None:
+        pass  # open clients, build agents
+
+    async def cleanup(self) -> None:
+        pass
 ```
 
-### 2. Create a module and trigger
-
 ```python
-from digitalkin import ArchetypeModule, ModuleContext, TriggerHandler
-from digitalkin.models.module.setup_types import SetupModel
+# triggers/echo_trigger.py
+from digitalkin import ModuleContext, TriggerHandler
+from echo_module import EchoIn, EchoModule, EchoOut, EchoOutput, EchoSetup
 
-
-class MyArchetype(ArchetypeModule[InputModel, OutputModel, SetupModel, BaseModel]):
-    async def initialize(self, context: ModuleContext, setup_data: SetupModel) -> None:
-        pass
-
-    async def cleanup(self, context: ModuleContext) -> None:
-        pass
-
-
-@MyArchetype.register
-class MessageTrigger(TriggerHandler[InputModel, SetupModel, OutputModel]):
+@EchoModule.register
+class EchoTrigger(TriggerHandler):
     protocol = "message"
-    input_format = InputModel
-    output_format = OutputModel
+    input_format = EchoIn
+    output_format = EchoOut
 
-    def __init__(self, context: ModuleContext) -> None:
-        super().__init__(context)
-
-    async def handle(
-        self,
-        input_data: InputModel,
-        setup_data: SetupModel,
-        context: ModuleContext,
-    ) -> None:
-        output = OutputModel(root=MessageOutput(reply=f"Echo: {input_data.root.content}"))
-        await self.send_message(context, output)
+    async def handle(self, input_data: EchoIn, setup_data: EchoSetup, context: ModuleContext) -> None:
+        reply = EchoOut(reply=setup_data.prefix + input_data.text)
+        await context.callbacks.send_message(EchoOutput(root=reply))
 ```
 
-### 3. Run the server
-
 ```python
+# server.py
 import asyncio
 from digitalkin.grpc_servers.module_server import ModuleServer
+from echo_module import EchoModule
 
 async def main() -> None:
-    server = ModuleServer(MyArchetype)
+    server = ModuleServer(EchoModule)
     await server.start_async()
-    await server.await_termination()
+    try:
+        await server.await_termination()
+    finally:
+        await server.stop_async()
 
 asyncio.run(main())
 ```
 
-## Redis Gateway
+```bash
+docker compose -f examples/redis_demo/docker-compose.yml up -d     # Redis on localhost:6379
+SERVICE_MODE=local DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python server.py
+```
 
-The embedded gateway enables real-time bidirectional communication between
-modules via Redis Streams, with crash recovery and horizontal scaling.
+The server listens on `SERVER_CHANNEL_HOST:SERVER_CHANNEL_PORT` (default `[::]:50055`).
+`SERVICE_MODE=local` (or `-d LOCAL`) uses in-process services; remote mode (default) needs the variables in `.env.minimum`.
+Consumers drive the module with the gateway RPCs described in the gateway protocol page.
 
-- **Durable Streaming**: Output persisted to Redis Streams — reconnection via `from_seq`.
-- **Zero-Copy Proto**: Binary proto serialization to Redis — no JSON intermediary.
-- **Horizontal Scaling**: Each module instance embeds its own gateway. Scale by adding replicas behind a load balancer.
+<!-- --8<-- [end:intro] -->
 
+## Documentation
+
+| Topic | Page |
+| --- | --- |
+| Architecture, data and signal flow | [docs/architecture.md](docs/architecture.md) |
+| Writing modules | [docs/module_authoring.md](docs/module_authoring.md) |
+| Wire contracts | [docs/gateway_protocol.md](docs/gateway_protocol.md), [docs/agui_events.md](docs/agui_events.md) (AG-UI) |
+| Deploy and tune | [docs/operations.md](docs/operations.md) |
+| Environment variables | [docs/environment_variables.md](docs/environment_variables.md) |
+| Testing | [docs/testing.md](docs/testing.md) |
+| Changelog | [docs/changelog/index.md](docs/changelog/index.md) |
+| API reference | [docs/api/api.md](docs/api/api.md) |
 
 ## Development
 
-### Prerequisites
-
-- Python 3.10+
-- [uv](https://astral.sh/uv) — modern Python package management
-- [Task](https://taskfile.dev/) — task runner
-
-### Setup
-
 ```bash
-git clone --recurse-submodules https://github.com/DigitalKin-ai/digitalkin.git
-cd digitalkin
-
-task setup-dev
-source .venv/bin/activate
+task setup-dev     # venv, dev/docs/tests deps, pre-commit hooks
+task check         # ruff format + lint, mypy, tests
+task run-tests     # full suite in docker compose (needs Redis)
+task docs-serve    # mkdocs serve
 ```
 
-### Common Tasks
-
-```bash
-task linter               # Format + lint (ruff) + type check (mypy)
-task check                # Linter + mypy + tests
-task run-tests            # Run pytest via Docker
-task build-package        # Build distribution
-task bump-version -- patch|minor|major
-
-task docs-serve           # Serve docs locally (mkdocs)
-task docs-build           # Build docs
-
-task generate-certificates  # Generate mTLS certs for gRPC
-task clean                # Remove build artifacts + __pycache__
-task clean-all            # Above + remove .venv
-```
-
-### Publishing Process
-
-1. Update code and commit changes (following conventional branch/commit
-   standard).
-2. Use `task bump-version -- major|minor|patch` to commit the new version.
-3. Use GitHub "Create Release" workflow to publish the new version.
-4. Workflow automatically publishes to Test PyPI and PyPI.
-
-## License
-
-This project is licensed under the terms specified in the LICENSE file.
-
----
-
-For more information, visit our [Documentation](https://digitalkin.com) or
-report issues on our
-[Issues page](https://github.com/DigitalKin-ai/digitalkin/issues).
+License: [CC BY-NC-SA 4.0](LICENSE).

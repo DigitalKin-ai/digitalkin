@@ -31,6 +31,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, dict]:
         """Get module schemas (input/output/setup/secret/cost).
@@ -38,6 +39,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         Args:
             module_address: Target module address
             module_port: Target module port
+            module_id: Target module ID (``modules:...``).
             llm_format: Return LLM-friendly format (simplified schema).
                 Note: cost always returns actual data regardless of this flag.
 
@@ -58,6 +60,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, Any]:
         """Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
@@ -68,13 +71,15 @@ class CommunicationStrategy(BaseStrategy, ABC):
         Args:
             module_address: Target module address.
             module_port: Target module port.
+            module_id: Target module ID (``modules:...``).
             llm_format: Return the LLM-friendly schema format.
 
         Returns:
             The config-setup JSON schema, or ``{}`` when unavailable.
         """
         logger.debug(
-            "get_module_config_schema not implemented for %s:%d (llm_format=%s); content validation skipped",
+            "get_module_config_schema not implemented for %s (%s:%d, llm_format=%s); content validation skipped",
+            module_id,
             module_address,
             module_port,
             llm_format,

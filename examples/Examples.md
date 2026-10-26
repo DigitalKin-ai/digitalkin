@@ -80,13 +80,13 @@ A typical module implements three key methods:
 
 ### Registry API
 
-#### DiscoverSearchModule
+#### SearchModules
 
 Finds modules based on search criteria.
 
 ```python
-request = discover_pb2.DiscoverSearchRequest(name="Module_Name")
-response = await registry_stub.DiscoverSearchModule(request)
+request = registry_dto_pb2.SearchModulesRequest(query="Module_Name")
+response = await registry_stub.SearchModules(request)
 ```
 
 Returns a list of matching modules with their metadata and connection information.
@@ -98,7 +98,7 @@ Returns a list of matching modules with their metadata and connection informatio
 Retrieves the input schema for a module.
 
 ```python
-request = information_pb2.GetModuleInputRequest(module_id=module_id)
+request = module_dto_pb2.GetModuleInputRequest(module_id=module_id)
 response = await module_stub.GetModuleInput(request)
 ```
 
@@ -107,7 +107,7 @@ response = await module_stub.GetModuleInput(request)
 Retrieves the output schema for a module.
 
 ```python
-request = information_pb2.GetModuleOutputRequest(module_id=module_id)
+request = module_dto_pb2.GetModuleOutputRequest(module_id=module_id)
 response = await module_stub.GetModuleOutput(request)
 ```
 
@@ -116,7 +116,7 @@ response = await module_stub.GetModuleOutput(request)
 Retrieves the setup configuration schema for a module.
 
 ```python
-request = information_pb2.GetModuleSetupRequest(module_id=module_id)
+request = module_dto_pb2.GetModuleSetupRequest(module_id=module_id)
 response = await module_stub.GetModuleSetup(request)
 ```
 
@@ -125,7 +125,7 @@ response = await module_stub.GetModuleSetup(request)
 Starts module execution with the provided input data.
 
 ```python
-request = lifecycle_pb2.StartModuleRequest(
+request = module_dto_pb2.StartModuleRequest(
     input=input_data.model_dump(),
     setup_id=setup_id
 )
@@ -139,7 +139,7 @@ This is a streaming RPC that returns multiple responses as the module processes 
 Stops module execution with the provided job_id.
 
 ```python
-request = lifecycle_pb2.StopModuleRequest(job_id=job_id)
+request = module_dto_pb2.StopModuleRequest(job_id=job_id)
 response = module_stub.StopModule(request)
 ```
 

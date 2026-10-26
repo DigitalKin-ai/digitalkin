@@ -1,6 +1,6 @@
 """Per-task profiling wrapper for VizTracer, Yappi, and Pyinstrument."""
 
-import datetime
+import datetime as dt
 import io
 import os
 from pathlib import Path
@@ -101,7 +101,7 @@ class TaskProfiler:
             return
 
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+            timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
             base = f"{self._task_id}_{timestamp}"
 
             if self._mode == ProfilerMode.VIZTRACER:

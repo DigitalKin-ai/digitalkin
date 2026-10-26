@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -54,6 +56,7 @@ if TYPE_CHECKING:
 from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -62,6 +65,8 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SourceCitation,
+    SourceCitationEvent,
     SubagentErrorEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
@@ -80,7 +85,9 @@ class AgnoStreamAdapter:
     """Stateful Agno→DigitalKin event converter.
 
     Auto-wraps ``run_content`` deltas in TextMessage/Reasoning lifecycle
-    events and tracks HITL pause state.
+    events and tracks HITL pause state. One adapter serves one stream: its
+    dedup state (citations, closed tool calls, completed runs) is reset on each
+    top-level ``run_started``, so it must not be shared across concurrent streams.
     """
 
     def __init__(self) -> None:
@@ -94,6 +101,11 @@ class AgnoStreamAdapter:
         self._reasonings: dict[str, tuple[str, dict[str, Any] | None]] = {}
 
         self._closed_tool_call_ids: set[str] = set()
+        # Tool calls started but not yet completed: id -> (run key, opener metadata, tool). AG-UI
+        # refuses RUN_FINISHED (and a subagent's close) while one of its tool calls is still open.
+        self._open_tool_calls: dict[str, tuple[str, dict[str, Any] | None, ToolInfo]] = {}
+        # Providers repeat the same citations on every delta and again on completion.
+        self._cited_urls: set[str] = set()
 
         self._active_run_id: str | None = None
         self._completed_run_ids: set[str] = set()
@@ -206,6 +218,7 @@ class AgnoStreamAdapter:
             "tool_call_started": self._handle_tool_call_started,
             "tool_call_completed": self._handle_tool_call_completed,
             "tool_call_error": self._handle_tool_call_error,
+            "custom_event": self._handle_custom_event,
         }
         dispatch = {
             enum_cls[name]: handler
@@ -261,7 +274,7 @@ class AgnoStreamAdapter:
         Returns:
             List containing a RunStartedEvent, or empty for duplicates / nested runs.
         """
-        parent_run_id = getattr(agno_event, "parent_run_id", None)
+        parent_run_id = agno_event.parent_run_id
         run_id = agno_event.run_id
 
         if parent_run_id:
@@ -309,10 +322,21 @@ class AgnoStreamAdapter:
         logger.info(
             "[agno-adapter] EMIT run_started run_id=%s session_id=%s active_was=%s metadata=%s",
             run_id,
-            getattr(agno_event, "session_id", None),
+            agno_event.session_id,
             self._active_run_id,
             self._last_metadata,
         )
+        # TODO(validate): ADAPTER-RESET per-run dedup state resets on each new top-level run
+        logger.info(
+            "[VALIDATE ADAPTER-RESET] run_id=%s clearing cited_urls=%d closed_tool_calls=%d completed_runs=%d",
+            run_id,
+            len(self._cited_urls),
+            len(self._closed_tool_call_ids),
+            len(self._completed_run_ids),
+        )
+        self._cited_urls.clear()
+        self._closed_tool_call_ids.clear()
+        self._completed_run_ids.clear()
         self._active_run_id = run_id
         return [
             RunStartedEvent(
@@ -335,14 +359,17 @@ class AgnoStreamAdapter:
             List of closing events followed by a RunCompletedEvent,
             or empty for nested / duplicate events.
         """
-        parent_run_id = getattr(agno_event, "parent_run_id", None)
+        parent_run_id = agno_event.parent_run_id
         run_id = agno_event.run_id
+        citations = self._citations(agno_event, timestamp)
 
         if parent_run_id:
             # Close this member's own text/reasoning bubble, then the matching step. Siblings
             # still streaming keep theirs open.
-            events: list[BaseAgentRunEvent] = self._close_content(self._run_key, timestamp)
+            events: list[BaseAgentRunEvent] = citations
+            events.extend(self._close_content(self._run_key, timestamp))
             events.extend(self._close_reasoning(self._run_key, timestamp))
+            events.extend(self._close_tool_calls(timestamp, self._run_key))
 
             subagent = self._subagents.pop(run_id, None) if run_id else None
             if subagent is not None and run_id:
@@ -377,8 +404,10 @@ class AgnoStreamAdapter:
 
         # AG-UI refuses RUN_FINISHED while any message, reasoning or step is still open, so
         # everything still running when the top-level run ends is force-closed here.
-        events = self._close_all_content(timestamp)
+        events = citations
+        events.extend(self._close_all_content(timestamp))
         events.extend(self._close_all_reasoning(timestamp))
+        events.extend(self._close_tool_calls(timestamp, None))
         events.extend(self._close_subagents(timestamp))
 
         if run_id:
@@ -413,6 +442,7 @@ class AgnoStreamAdapter:
             # terminal for the whole stream, so a member's failure gets its own event.
             events = self._close_content(run_id, timestamp)
             events.extend(self._close_reasoning(run_id, timestamp))
+            events.extend(self._close_tool_calls(timestamp, run_id))
             subagent = self._subagents.pop(run_id)
             logger.info("[agno-adapter] SUBAGENT_ERROR name=%s subagent_run_id=%s", subagent[0], run_id)
             events.append(
@@ -431,7 +461,17 @@ class AgnoStreamAdapter:
         # dangling bubbles as there were runs in flight.
         events = self._close_all_content(timestamp)
         events.extend(self._close_all_reasoning(timestamp))
-        events.extend(self._close_subagents(timestamp))
+        # AG-UI 1.0: after RUN_ERROR a consumer treats every open invocation and tool call as
+        # abandoned and expects no close; a synthetic SUBAGENT_FINISHED would read as success.
+        if self._subagents or self._open_tool_calls:
+            # TODO(validate): AGUI-RUN-ERROR-ABANDON open subagents/tool calls are abandoned, not closed
+            logger.info(
+                "[VALIDATE AGUI-RUN-ERROR-ABANDON] abandoned on RUN_ERROR: subagents=%s tool_calls=%s",
+                [(run, name) for run, (name, _) in self._subagents.items()],
+                [(call, tool.tool_name) for call, (_, _, tool) in self._open_tool_calls.items()],
+            )
+            self._subagents.clear()
+            self._open_tool_calls.clear()
         events.append(
             RunErrorEvent(
                 event=AgentRunEvent.RUN_ERROR,
@@ -479,17 +519,37 @@ class AgnoStreamAdapter:
         Returns:
             List containing a ReasoningContentDeltaEvent.
         """
+        delta = agno_event.reasoning_content
+        if not delta:
+            return []
+        events: list[BaseAgentRunEvent] = []
         open_reasoning = self._reasonings.get(self._run_key)
-        return [
+        if open_reasoning is None:
+            # TODO(validate): AGUI-REASONING-ORPHAN a delta without reasoning_started opens its own sequence
+            events.extend(self._close_content(self._run_key, timestamp))
+            open_reasoning = (str(uuid.uuid4()), self._last_metadata)
+            self._reasonings[self._run_key] = open_reasoning
+            logger.info("[VALIDATE AGUI-REASONING-ORPHAN] reasoning delta opened sequence %s", open_reasoning[0])
+            events.append(
+                ReasoningStartedEvent(
+                    event=AgentRunEvent.REASONING_STARTED,
+                    reasoning_id=open_reasoning[0],
+                    subagent_run_id=self._subagent_of(self._run_key),
+                    timestamp=timestamp,
+                    metadata=self._last_metadata,
+                )
+            )
+        events.append(
             ReasoningContentDeltaEvent(
                 event=AgentRunEvent.REASONING_CONTENT_DELTA,
-                delta=agno_event.reasoning_content or "",
-                reasoning_id=open_reasoning[0] if open_reasoning else None,
+                delta=delta,
+                reasoning_id=open_reasoning[0],
                 subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
-        ]
+        )
+        return events
 
     def _handle_reasoning_step(self, agno_event: AgnoReasoningStepEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle ``RunEvent.reasoning_step`` — emitted by Agno's ``ReasoningTools``.
@@ -514,7 +574,7 @@ class AgnoStreamAdapter:
         """
         events: list[BaseAgentRunEvent] = []
 
-        content = getattr(agno_event, "reasoning_content", "")
+        content = agno_event.reasoning_content
         if not content:
             return events
 
@@ -617,6 +677,8 @@ class AgnoStreamAdapter:
                 tool_args=tool.tool_args,
                 result=None,
             )
+            if tool.tool_call_id:
+                self._open_tool_calls[tool.tool_call_id] = (self._run_key, self._last_metadata, tool_info)
         events.append(
             ToolCallStartedEvent(
                 event=AgentRunEvent.TOOL_CALL_STARTED,
@@ -650,8 +712,29 @@ class AgnoStreamAdapter:
 
         if tool_call_id:
             self._closed_tool_call_ids.add(tool_call_id)
+            self._open_tool_calls.pop(tool_call_id, None)
 
         content = agno_event.content
+        if tool is not None and tool.tool_call_error:
+            # Agno flags a raised tool on the completed event, then sends a tool_call_error
+            # that the closed-id check drops — so the failure is surfaced here.
+            # TODO(validate): AGUI-TOOL-FAILED-STATUS a raised tool surfaces as ToolCallError, not success
+            logger.info(
+                "[VALIDATE AGUI-TOOL-FAILED-STATUS] tool %s (id=%s) failed: %s",
+                tool.tool_name,
+                tool_call_id,
+                tool.result,
+            )
+            return [
+                ToolCallErrorEvent(
+                    event=AgentRunEvent.TOOL_CALL_ERROR,
+                    tool=tool_info,
+                    error_message=str(tool.result) if tool.result else None,
+                    subagent_run_id=self._subagent_of(self._run_key),
+                    timestamp=timestamp,
+                    metadata=self._last_metadata,
+                )
+            ]
         return [
             ToolCallCompletedEvent(
                 event=AgentRunEvent.TOOL_CALL_COMPLETED,
@@ -677,8 +760,8 @@ class AgnoStreamAdapter:
         events: list[BaseAgentRunEvent] = self._close_all_reasoning(timestamp)
         events.extend(self._close_all_content(timestamp))
 
-        tools = getattr(agno_event, "tools", None) or []
-        requirements = getattr(agno_event, "requirements", None) or []
+        tools = agno_event.tools or []
+        requirements = agno_event.requirements or []
 
         self._is_paused = True
         self._paused_tool_executions = list(tools)
@@ -687,9 +770,9 @@ class AgnoStreamAdapter:
         # Only synthesize for external tools; server-side ones already streamed.
         seen_ids: set[str] = set()
         for tool_exec in tools:
-            if not getattr(tool_exec, "external_execution_required", False):
+            if not tool_exec.external_execution_required:
                 continue
-            tool_call_id = getattr(tool_exec, "tool_call_id", None)
+            tool_call_id = tool_exec.tool_call_id
             if not tool_call_id or tool_call_id in seen_ids:
                 continue
             seen_ids.add(tool_call_id)
@@ -698,9 +781,24 @@ class AgnoStreamAdapter:
                 # Same action-suffix as the in-process managers: an external-execution
                 # manager (load_manager) surfaces as load_manager_load_tool, not just load_manager.
                 tool_name=self._display_tool_name(tool_exec),
-                tool_args=getattr(tool_exec, "tool_args", None),
+                tool_args=tool_exec.tool_args,
                 result=None,
             )
+            self._closed_tool_call_ids.add(tool_call_id)
+            opened = self._open_tool_calls.pop(tool_call_id, None)
+            if opened is not None:
+                # Agno already streamed its start: close that call, never open the id twice.
+                events.append(
+                    ToolCallCompletedEvent(
+                        event=AgentRunEvent.TOOL_CALL_COMPLETED,
+                        tool=opened[2],
+                        content=None,
+                        subagent_run_id=self._subagent_of(opened[0]),
+                        timestamp=timestamp,
+                        metadata=opened[1],
+                    )
+                )
+                continue
             logger.debug(
                 "Synthesizing tool-call events for external_execution tool %s (id=%s)",
                 tool_info.tool_name,
@@ -721,8 +819,17 @@ class AgnoStreamAdapter:
                     metadata=None,
                 ),
             ))
-            self._closed_tool_call_ids.add(tool_call_id)
+        # Any other call still open cannot complete across the pause.
+        events.extend(self._close_tool_calls(timestamp, None))
 
+        # The stream ends here but each open delegation may continue under the same id on resume.
+        # TODO(validate): AGUI-SUBAGENT-SUSPENDED open subagents close as suspended on a HITL pause
+        if self._subagents:
+            logger.info(
+                "[VALIDATE AGUI-SUBAGENT-SUSPENDED] suspending on pause: %s",
+                [(run, name) for run, (name, _) in self._subagents.items()],
+            )
+        events.extend(self._close_subagents(timestamp, outcome="suspended"))
         return events
 
     def _handle_tool_call_error(self, agno_event: AgnoToolCallErrorEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
@@ -749,6 +856,7 @@ class AgnoStreamAdapter:
 
         if tool_call_id:
             self._closed_tool_call_ids.add(tool_call_id)
+            self._open_tool_calls.pop(tool_call_id, None)
 
         content = agno_event.content
         return [
@@ -776,6 +884,7 @@ class AgnoStreamAdapter:
             logger.debug("Flushing %d open subagent(s)", len(self._subagents))
         events: list[BaseAgentRunEvent] = self._close_all_content(None)
         events.extend(self._close_all_reasoning(None))
+        events.extend(self._close_tool_calls(None, None))
         events.extend(self._close_subagents(None))
         return events
 
@@ -819,7 +928,7 @@ class AgnoStreamAdapter:
             event for run_key in reversed(list(self._reasonings)) for event in self._close_reasoning(run_key, timestamp)
         ]
 
-    def _close_subagents(self, timestamp: Any) -> list[BaseAgentRunEvent]:
+    def _close_subagents(self, timestamp: Any, outcome: Literal["suspended"] | None = None) -> list[BaseAgentRunEvent]:
         """Close every delegation still in flight, innermost first.
 
         AG-UI refuses RUN_FINISHED while any subagent is still active, so nothing may be
@@ -827,6 +936,7 @@ class AgnoStreamAdapter:
 
         Args:
             timestamp: Timestamp to stamp on the closing events.
+            outcome: ``suspended`` when the stream pauses for outside input; None means success.
 
         Returns:
             List of SubagentFinishedEvent, empty when none is open.
@@ -836,12 +946,42 @@ class AgnoStreamAdapter:
                 event=AgentRunEvent.SUBAGENT_FINISHED,
                 subagent_run_id=run_id,
                 result=None,
+                outcome=outcome,
                 timestamp=timestamp,
                 metadata=metadata,
             )
             for run_id, (_, metadata) in reversed(list(self._subagents.items()))
         ]
         self._subagents.clear()
+        return events
+
+    def _close_tool_calls(self, timestamp: Any, run_key: str | None) -> list[BaseAgentRunEvent]:
+        """Close tool calls that never completed, as errors attributed to whoever opened them.
+
+        Args:
+            timestamp: Timestamp to stamp on the closing events.
+            run_key: Close only this run's calls; None closes every open call.
+
+        Returns:
+            One ToolCallErrorEvent per closed call.
+        """
+        closing = [call for call, (key, _, _) in self._open_tool_calls.items() if run_key is None or key == run_key]
+        events: list[BaseAgentRunEvent] = []
+        for call in closing:
+            key, metadata, tool = self._open_tool_calls.pop(call)
+            # TODO(validate): AGUI-TOOL-CLOSE a tool call still open when its run ends is closed as failed
+            logger.info("[VALIDATE AGUI-TOOL-CLOSE] closing unfinished tool call %s (%s)", call, tool.tool_name)
+            self._closed_tool_call_ids.add(call)
+            events.append(
+                ToolCallErrorEvent(
+                    event=AgentRunEvent.TOOL_CALL_ERROR,
+                    tool=tool,
+                    error_message="tool call did not complete before its run ended",
+                    subagent_run_id=self._subagent_of(key),
+                    timestamp=timestamp,
+                    metadata=metadata,
+                )
+            )
         return events
 
     def _close_content(self, run_key: str, timestamp: Any) -> list[BaseAgentRunEvent]:
@@ -884,6 +1024,80 @@ class AgnoStreamAdapter:
             event for run_key in reversed(list(self._messages)) for event in self._close_content(run_key, timestamp)
         ]
 
+    def _source_event(self, payload: Any, timestamp: Any) -> SourceCitationEvent | None:
+        """Validate one source payload into a ``source_citation`` event.
+
+        Args:
+            payload: ``{url, title?, description?}`` as received.
+            timestamp: Event timestamp.
+
+        Returns:
+            The event, or None when the payload is invalid (logged and dropped).
+        """
+        try:
+            citation = SourceCitation.model_validate(payload)
+        except ValidationError as exc:
+            logger.warning("Dropped source citation %r: %s", payload, exc)
+            return None
+        return SourceCitationEvent(
+            event=AgentRunEvent.CUSTOM,
+            name="source_citation",
+            value=citation,
+            subagent_run_id=self._subagent_of(self._run_key),
+            timestamp=timestamp,
+            metadata=self._last_metadata,
+        )
+
+    def _citations(
+        self, agno_event: AgnoRunContentEvent | AgnoRunCompletedEvent, timestamp: Any
+    ) -> list[BaseAgentRunEvent]:
+        """Convert the model-native ``citations.urls`` not yet emitted in this run.
+
+        Returns:
+            One SourceCitationEvent per new URL.
+        """
+        citations = agno_event.citations
+        if citations is None or not citations.urls:
+            return []
+        events: list[BaseAgentRunEvent] = []
+        for cite in citations.urls:
+            if not cite.url:
+                logger.warning("Dropped source citation without url: title=%r", cite.title)
+                continue
+            if cite.url in self._cited_urls:
+                continue
+            self._cited_urls.add(cite.url)
+            event = self._source_event({"url": cite.url, "title": cite.title}, timestamp)
+            if event is not None:
+                events.append(event)
+        return events
+
+    def _handle_custom_event(self, agno_event: AgnoRunEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Handle RunEvent.custom_event — agno stores the tool's kwargs as attributes.
+
+        Returns:
+            A SourceCitationEvent for ``source_citation``, a generic CustomEvent otherwise,
+            or empty when the event is unnamed or its source is invalid.
+        """
+        data = agno_event.__dict__
+        name = data.get("name")
+        if not name:
+            logger.debug("Skipping unnamed agno custom event: %r", data)
+            return []
+        if name == "source_citation":
+            event = self._source_event(data.get("value"), timestamp)
+            return [event] if event is not None else []
+        return [
+            CustomEvent(
+                event=AgentRunEvent.CUSTOM,
+                name=name,
+                value=data.get("value"),
+                subagent_run_id=self._subagent_of(self._run_key),
+                timestamp=timestamp,
+                metadata=self._last_metadata,
+            )
+        ]
+
     def _handle_run_content(self, agno_event: AgnoRunContentEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_content — the core state machine.
 
@@ -892,7 +1106,7 @@ class AgnoStreamAdapter:
         Returns:
             DigitalKin events for this chunk.
         """
-        events: list[BaseAgentRunEvent] = []
+        events = self._citations(agno_event, timestamp)
 
         reasoning_content = agno_event.reasoning_content
         content = agno_event.content

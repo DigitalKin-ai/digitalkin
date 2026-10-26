@@ -10,7 +10,7 @@ Three phases per operation:
 3. Assert — fail if p95 exceeds budget
 
 Budgets are intentionally generous for CI runners. Production targets
-are tighter (see docs/architecture_presentation.md).
+are tighter.
 """
 
 from __future__ import annotations
@@ -20,23 +20,25 @@ import contextlib
 import json
 import statistics
 import time
-from collections.abc import Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 pytestmark = [pytest.mark.stress, pytest.mark.timeout(30)]
 
 # Latency budgets (milliseconds) — generous for CI, not prod targets
 BUDGETS = {
-    "circuit_breaker_check": 0.1,        # < 100µs
-    "circuit_breaker_record": 0.1,       # < 100µs
-    "signal_dispatch": 0.5,              # < 500µs
-    "signal_dedup": 0.5,                 # < 500µs
-    "send_buffer_enqueue": 1.0,          # < 1ms (no flush)
-    "stream_session_enqueue": 1.0,       # < 1ms (queue not full)
-    "stream_registry_register": 0.5,     # < 500µs
+    "circuit_breaker_check": 0.1,  # < 100μs
+    "circuit_breaker_record": 0.1,  # < 100μs
+    "signal_dispatch": 0.5,  # < 500μs
+    "signal_dedup": 0.5,  # < 500μs
+    "send_buffer_enqueue": 1.0,  # < 1ms (no flush)
+    "stream_session_enqueue": 1.0,  # < 1ms (queue not full)
+    "stream_registry_register": 0.5,  # < 500μs
 }
 
 WARMUP_ITERATIONS = 10
@@ -158,6 +160,7 @@ class TestSignalDispatchPerf:
         session = MagicMock()
         session.pending_signal_action = ""
         session.last_signal_published_ns = 0
+        session.cancelled = False
 
         async def long_running() -> None:
             await asyncio.sleep(60)
@@ -234,16 +237,7 @@ class TestStreamRegistryPerf:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        redis = MagicMock()
-        redis.eval = AsyncMock(return_value=1)
-        pipe = MagicMock()
-        pipe.decr = MagicMock(return_value=pipe)
-        pipe.zrem = MagicMock(return_value=pipe)
-        pipe.delete = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=[])
-        redis.pipeline = MagicMock(return_value=pipe)
-
-        reg = StreamRegistry(redis)
+        reg = StreamRegistry()
 
         for i in range(WARMUP_ITERATIONS):
             await reg.register(StreamSession(task_id=f"warmup_{i}"))

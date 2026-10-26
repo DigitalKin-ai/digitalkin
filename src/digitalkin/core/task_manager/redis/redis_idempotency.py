@@ -33,18 +33,20 @@ class RedisIdempotency:
         """
         self._redis_client = redis_client
 
-    async def claim(self, task_id: str, instance_id: str) -> ClaimResult:
+    async def claim(self, task_id: str, instance_id: str, mission_id: str) -> ClaimResult:
         """Atomically claim execution of ``task_id``.
 
-        ``CLAIMED`` on the first claim; ``RECLAIMED`` if ``instance_id``
-        already owns it (same replica retrying); ``TAKEN`` if another
-        replica owns it. The GET/SET is a single Lua eval so concurrent
+        The claim stores ``{instance_id}|{mission_id}`` so ``SendSignal`` can tie a
+        cancel to the owning mission. ``CLAIMED`` on the first claim; ``RECLAIMED``
+        if the same owner already holds it (same replica retrying, TTL left untouched); ``TAKEN``
+        if another replica owns it. The GET/SET is a single Lua eval so concurrent
         callers can never both win. The script returns the ``ClaimResult``
         integer value (0/1/2) — a Redis integer reply.
 
         Args:
             task_id: Task whose execution is being claimed.
             instance_id: Stable per-process identifier of the claimer.
+            mission_id: Mission that owns the task.
 
         Returns:
             The claim outcome.
@@ -55,7 +57,6 @@ class RedisIdempotency:
             f"    redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))\n"
             f"    return {ClaimResult.CLAIMED.value}\n"
             f"elseif current == ARGV[1] then\n"
-            f"    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))\n"
             f"    return {ClaimResult.RECLAIMED.value}\n"
             f"else\n"
             f"    return {ClaimResult.TAKEN.value}\n"
@@ -64,7 +65,7 @@ class RedisIdempotency:
         raw = await self._redis_client.eval(
             script,
             [f"idem:{task_id}"],
-            [instance_id, str(get_redis_settings().idem_ttl)],
+            [f"{instance_id}|{mission_id}", str(get_redis_settings().idem_ttl)],
         )
         value = raw.decode() if isinstance(raw, bytes) else raw
         # An unexpected nil reply is treated as TAKEN so we never double-execute.
@@ -73,9 +74,9 @@ class RedisIdempotency:
     async def release(self, task_id: str) -> None:
         """Drop the claim so the task can be retried immediately.
 
-        Used when a claim was acquired but execution could not start (e.g.
-        the session was rejected at capacity), so the TTL doesn't block a
-        legitimate retry.
+        Used when a claim was acquired but execution never started (capacity
+        rejection, seed failure, dial failed before the runner spawned), so the
+        TTL doesn't block a legitimate retry.
 
         Args:
             task_id: Task whose claim is released.

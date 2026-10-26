@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import grpc
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_enums_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 from grpc._cython.cygrpc import UsageError as _GrpcUsageError  # ruff: ignore[import-private-name]
 from redis.exceptions import RedisError
@@ -49,7 +49,7 @@ class GatewayServicer:
 
     @staticmethod
     def _sentinel(seq: int, task_id: str, protocol: str, **fields: Any) -> Any:
-        """Build a StreamClient carrying a control sentinel.
+        """Build a StreamResponse carrying a control sentinel.
 
         ``seq=0`` marks gateway-emitted control entries; Redis-replayed
         entries start at 1.
@@ -61,11 +61,11 @@ class GatewayServicer:
             fields: Additional Struct fields under ``data.root``.
 
         Returns:
-            StreamClient proto.
+            StreamResponse proto.
         """
         s = struct_pb2.Struct()
         s.update({"root": {"protocol": protocol, **fields}})
-        return gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=s)
+        return gateway_messages_pb2.StreamResponse(seq=seq, task_id=task_id, data=s)
 
     async def _fatal_close(self, task_id: str, code: str, message: str) -> AsyncGenerator:
         """Yield ``stream.error(fatal=true)`` then ``stream.end``.
@@ -76,7 +76,7 @@ class GatewayServicer:
             message: Human-readable detail.
 
         Yields:
-            StreamClient sentinels.
+            StreamResponse sentinels.
         """
         yield self._sentinel(
             0,
@@ -104,7 +104,7 @@ class GatewayServicer:
             module_runner: Orchestrator invoked once the consumer's first
                 reply lands. Required in embedded mode.
         """
-        self._registry = StreamRegistry(redis_client)
+        self._registry = StreamRegistry()
         self._redis_client = redis_client
         self._idempotency = RedisIdempotency(redis_client)
         self._cache_handler = cache_handler
@@ -166,7 +166,7 @@ class GatewayServicer:
         """
         await context.abort(grpc.StatusCode.UNIMPLEMENTED, "AssociateTask is served by the backend")
 
-    async def StartStream(  # ruff: ignore[too-many-return-statements]
+    async def StartStream(  # ruff: ignore[complex-structure, too-many-return-statements, too-many-locals, too-many-statements]
         self,
         request: Any,
         context: grpc.aio.ServicerContext,
@@ -198,7 +198,7 @@ class GatewayServicer:
         timer.mark("validate_ids")
         if err is not None:
             logger.warning("Invalid ID in StartStream: %s", err, extra=log_extra)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         md = dict(context.invocation_metadata() or [])
         raw_address = md.get("x-client-address", "")
@@ -214,10 +214,10 @@ class GatewayServicer:
                 client_address,
                 extra=log_extra,
             )
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         if self._registry.get(task_id) is not None:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("dedup_check")
 
         # Durable at-most-once guard: survives session teardown and spans replicas.
@@ -225,26 +225,25 @@ class GatewayServicer:
         # consumer), so a re-issued StartStream for an already-claimed/running task is
         # REFUSED — one task_id maps to exactly one dial.
         try:
-            claim = await self._idempotency.claim(task_id, SharedRedisListener.PROCESS_ID)
+            claim = await self._idempotency.claim(task_id, SharedRedisListener.PROCESS_ID, request.mission_id)
         except RedisError:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("idempotency_claim")
         if claim is not ClaimResult.CLAIMED:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            if claim is ClaimResult.RECLAIMED:
+                # TODO(validate): IDEM-RECLAIM a refused StartStream does not refresh the idem TTL
+                logger.info("[VALIDATE IDEM-RECLAIM] StartStream refused; idem TTL not refreshed", extra=log_extra)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         session = StreamSession(task_id=task_id)
-        accepted = await self._registry.register(
-            session,
-            setup_id=request.setup_id,
-            mission_id=request.mission_id,
-        )
+        accepted = await self._registry.register(session)
         timer.mark("registry_register")
         if not accepted:
             logger.warning("Session rejected (capacity)", extra=log_extra)
             # Release the claim so this task can be retried once capacity frees up.
             with contextlib.suppress(RedisError):
                 await self._idempotency.release(task_id)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         # Seed stream.start so the consumer's first XREAD finds data immediately.
         start_info = struct_pb2.Struct()
@@ -258,18 +257,42 @@ class GatewayServicer:
             },
         })
         timer.mark("build_start_info")
+        stream_key = f"task:{task_id}:stream"
+        # A fresh claim owns the task: drop any stream/cursor left by a released failed dial so a
+        # retry never replays its stream.error + eos, and arm a TTL before the first output.
+        cancel_key = f"cancel:{task_id}"
+        pipe = self._redis_client.pipeline()
+        pipe.delete(stream_key, f"task:{task_id}:cursor")
+        pipe.xadd(stream_key, {"pb": start_info.SerializeToString(), "seq": "0"})
+        pipe.expire(stream_key, get_gateway_settings().stream.redis_stream_initial_ttl)
+        pipe.get(cancel_key)
         try:
-            await self._redis_client.xadd(
-                f"task:{task_id}:stream",
-                {"pb": start_info.SerializeToString(), "seq": "0"},
-            )
+            stale, _, _, tombstone = await pipe.execute()
         except RedisError:
             # Claimed + registered but the stream couldn't be seeded: undo both so a retry re-runs.
             with contextlib.suppress(RedisError):
                 await self._idempotency.release(task_id)
             await self._registry.unregister(task_id)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+        # A pre-start cancel binds the task unless another mission sent it (a mission-less one binds).
+        if tombstone and tombstone.decode() != request.mission_id:
+            # Compare-and-delete: a cancel the owner sends meanwhile overwrites the value and is kept.
+            with contextlib.suppress(RedisError):
+                dropped = await self._redis_client.eval(
+                    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+                    [cancel_key],
+                    [tombstone.decode()],
+                )
+                # TODO(validate): CANCEL-FOREIGN a cancel tombstone from another mission is dropped at StartStream
+                logger.warning(
+                    "[VALIDATE CANCEL-FOREIGN] cancel tombstone from mission=%r dropped=%s",
+                    tombstone,
+                    bool(dropped),
+                    extra=log_extra,
+                )
         timer.mark("xadd_stream_start")
+        # TODO(validate): SEED-TTL stream.start seed carries a TTL and drops stale keys
+        logger.info("[VALIDATE SEED-TTL] stream.start seeded with TTL; stale keys dropped=%s", stale, extra=log_extra)
 
         logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
         self._spawn(
@@ -289,7 +312,7 @@ class GatewayServicer:
             self._registry.active_count,
             extra=log_extra,
         )
-        return gateway_pb2.StartStreamResponse(accepted=True, task_id=task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=True, task_id=task_id)
 
     async def _emit_fatal_to_redis(
         self,
@@ -320,22 +343,27 @@ class GatewayServicer:
             },
         })
         stream_key = f"task:{task_id}:stream"
+        ttl = get_gateway_settings().stream.redis_stream_ttl
         try:
             await self._redis_client.xadd(
                 stream_key,
                 {"pb": error_struct.SerializeToString()},
             )
             await self._redis_client.xadd(stream_key, {"eos": b"true"})
-            await self._redis_client.expire(stream_key, get_gateway_settings().stream.redis_stream_ttl)
-            logger.error(
-                "stream.error emitted: code=%s message=%s",
+            await self._redis_client.expire(stream_key, ttl)
+            await self._redis_client.expire(f"idem:{task_id}", ttl)
+        except RedisError:
+            logger.exception(
+                "Could not emit stream.error to Redis (Redis is also down): code=%s message=%s",
                 code,
                 message,
                 extra=log_extra,
             )
-        except RedisError:
-            logger.exception(
-                "Could not emit stream.error to Redis (Redis is also down): code=%s message=%s",
+        else:
+            # TODO(validate): IDEM-TTL-EOS idem TTL drops to redis_stream_ttl once EOS is written
+            logger.info("[VALIDATE IDEM-TTL-EOS] idem TTL shortened to %ds after fatal EOS", ttl, extra=log_extra)
+            logger.error(
+                "stream.error emitted: code=%s message=%s",
                 code,
                 message,
                 extra=log_extra,
@@ -346,18 +374,18 @@ class GatewayServicer:
         request_iterator: AsyncIterator[Any],
         context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> AsyncGenerator[Any, None]:
-        """BiDi: receive StreamServer from client, yield StreamClient back.
+        """BiDi: receive StreamRequest from the client, yield StreamResponse back.
 
-        First StreamServer carries ``task_id``, resume cursor in ``seq``,
+        First StreamRequest carries ``task_id``, resume cursor in ``from_seq``,
         and the query in ``data``. Errors flow as ``stream.error`` +
         ``stream.end`` sentinels — never via ``context.abort``.
 
         Args:
-            request_iterator: BiDi stream of StreamServer from the client.
+            request_iterator: BiDi stream of StreamRequest from the client.
             context: gRPC service context.
 
         Yields:
-            StreamClient — sentinels and module output.
+            StreamResponse — sentinels and module output.
         """
         try:
             first_msg = await anext(request_iterator)
@@ -365,7 +393,7 @@ class GatewayServicer:
             return
 
         task_id = first_msg.task_id
-        from_seq = first_msg.seq
+        from_seq = first_msg.from_seq
 
         if GatewayValidator.validate_id(task_id, "task_id") is not None:
             async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "invalid task_id"):
@@ -416,20 +444,14 @@ class GatewayServicer:
                 yield out
             return
 
-        # First message's data is the query.
-        input_key = f"task:{task_id}:input"
         if first_msg.data and len(first_msg.data.fields) > 0:
-            try:
-                await self._redis_client.xadd(
-                    input_key,
-                    {"pb": first_msg.data.SerializeToString()},
-                )
-            except RedisError:
-                async for out in self._fatal_close(
-                    task_id, StreamErrorCode.REDIS_UNAVAILABLE.value, "redis unavailable"
-                ):
-                    yield out
-                return
+            # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
+            logger.info(
+                "[VALIDATE NO-INPUT] Stream first message data is not used yet; dropped bytes=%d keys=%s",
+                first_msg.data.ByteSize(),
+                list(first_msg.data.fields),
+                extra={"task_id": task_id},
+            )
 
         upstream_task = self._spawn(
             self._read_peer_upstream(request_iterator, task_id, session),
@@ -448,64 +470,73 @@ class GatewayServicer:
             if removed is not None:
                 await removed.teardown()
 
+    @staticmethod
     async def _read_peer_upstream(
-        self,
         request_iterator: AsyncIterator,
         task_id: str,
         session: StreamSession,
     ) -> None:
-        """Drain follow-up upstream messages onto the task's input stream.
+        """Drain follow-up upstream messages; nothing consumes them, so each is logged and dropped.
 
         Args:
             request_iterator: BiDi stream from the client.
-            task_id: Task identifier (input stream key).
+            task_id: Task identifier.
             session: Stream session (stop-event check).
         """
-        input_key = f"task:{task_id}:input"
         try:
             async for msg in request_iterator:
                 if session._stop_event.is_set():  # ruff: ignore[private-member-access]
                     break
                 if msg.data and len(msg.data.fields) > 0:
-                    await self._redis_client.xadd(
-                        input_key,
-                        {"pb": msg.data.SerializeToString()},
+                    # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
+                    logger.info(
+                        "[VALIDATE NO-INPUT] Stream follow-up input is not used yet; dropped bytes=%d keys=%s",
+                        msg.data.ByteSize(),
+                        list(msg.data.fields),
+                        extra={"task_id": task_id},
                     )
         except asyncio.CancelledError:
             pass
         except Exception:
             logger.exception("Peer upstream reader error: task_id=%s", task_id)
 
-    async def SendSignal(
+    async def SendSignal(  # ruff: ignore[complex-structure, too-many-return-statements]
         self,
         request: Any,
         context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> Any:
-        """Forward control signal via Redis pub/sub or dispatch cache invalidation.
+        """Forward a cancel via Redis pub/sub or dispatch a cache invalidation.
+
+        A ``SETUP`` / ``TOOLS`` invalidation targets the caller's ``x-setup-id``.
 
         Args:
-            request: ClientSignalRequest proto.
+            request: SendSignalRequest proto.
             context: gRPC service context.
 
         Returns:
-            ClientSignalResponse proto.
+            SendSignalResponse proto.
         """
         timer = StepTimer()
-        action_name = gateway_pb2.SignalAction.Name(request.action)
-        task_id = request.task_id
+        signal = request.WhichOneof("signal")
+        task_id = request.cancel.task_id
         last_mark = "init"
-        log_extra = {"task_id": task_id, "action": action_name}
+        log_extra = {"task_id": task_id}
 
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            if action_name.startswith("INVALIDATE_"):
-                setup_id_for_invalidate = task_id
+            if signal is None:
+                logger.warning("[gateway] SendSignal_failed: failure=NoSignal task_id=%s", task_id, extra=log_extra)
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
+
+            if signal == "invalidate":
+                scope = gateway_enums_pb2.CacheScope.Name(request.invalidate.scope)
+                setup_id = RequestContext.current().get("setup_id", "")
                 if self._cache_handler is not None:
-                    await self._cache_handler(action_name, setup_id_for_invalidate)
+                    await self._cache_handler(scope, setup_id)
                     timer.mark("cache_handler")
                     last_mark = "cache_handler"
                 payload = json.dumps({
-                    "action": action_name.lower(),
-                    "setup_id": setup_id_for_invalidate,
+                    "action": f"invalidate_{scope.lower()}",
+                    "setup_id": setup_id,
                     "published_at_ns": time.time_ns(),
                     # Tag origin so this process skips its own fan-out (no double invalidate).
                     "origin": SharedRedisListener.PROCESS_ID,
@@ -521,73 +552,123 @@ class GatewayServicer:
                         exc_info=True,
                     )
                 logger.debug(
-                    "[perf] SendSignal: %s path=cache total=%.2fms action=%s setup_id=%s",
+                    "[perf] SendSignal: %s path=cache total=%.2fms scope=%s setup_id=%s",
                     timer.format_steps(),
                     timer.total_ms(),
-                    action_name,
-                    setup_id_for_invalidate,
+                    scope,
+                    setup_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=True, task_id=setup_id_for_invalidate)
+                return gateway_dto_pb2.SendSignalResponse(success=True)
 
             if GatewayValidator.validate_id(task_id, "task_id") is not None:
                 logger.warning(
                     "[gateway] SendSignal_failed: failure=InvalidTaskId at_step=%s "
-                    "elapsed_ms=%.2f action=%s task_id=%s",
+                    "elapsed_ms=%.2f signal=%s task_id=%s",
                     last_mark,
                     timer.elapsed_now_ms(),
-                    action_name,
+                    signal,
                     task_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
             timer.mark("validate_task_id")
             last_mark = "validate_task_id"
 
-            session = self._registry.get(task_id)
-            timer.mark("registry_lookup")
-            last_mark = "registry_lookup"
-            if session is None:
+            # The task may run on any replica, or not be registered yet: publish, and leave a
+            # durable tombstone (the caller's mission) the ModuleRunner checks around registration.
+            # A claimed task (``idem`` = ``{process}|{mission}``) only accepts its own mission's cancel;
+            # a caller without ``x-mission-id`` is let through and logged (CANCEL-NO-MISSION).
+            mission_id = RequestContext.current().get("mission_id", "")
+            idem_exists, receivers = await self._redis_client.eval(
+                "local owner = redis.call('GET', KEYS[1])\n"
+                "local sep = owner and string.find(owner, '|', 1, true)\n"
+                "if sep and ARGV[1] ~= '' and string.sub(owner, sep + 1) ~= ARGV[1] then\n"
+                "    return {-1, 0}\n"
+                "end\n"
+                "redis.call('SET', KEYS[2], ARGV[1], 'EX', tonumber(ARGV[2]))\n"
+                "return {owner and 1 or 0, redis.call('PUBLISH', KEYS[3], ARGV[3])}",
+                [f"idem:{task_id}", f"cancel:{task_id}", f"signal_ch:{task_id}"],
+                [
+                    mission_id,
+                    str(get_gateway_settings().stream.redis_stream_initial_ttl),
+                    json.dumps({"action": "cancel", "task_id": task_id, "published_at_ns": time.time_ns()}),
+                ],
+            )
+            timer.mark("redis_publish")
+            last_mark = "redis_publish"
+            if idem_exists == -1:
+                # TODO(validate): CANCEL-OWNER a cancel from another mission is refused and leaves no tombstone
                 logger.warning(
-                    "[gateway] SendSignal_failed: failure=TaskNotFound at_step=%s elapsed_ms=%.2f action=%s task_id=%s",
-                    last_mark,
-                    timer.elapsed_now_ms(),
-                    action_name,
+                    "[VALIDATE CANCEL-OWNER] SendSignal_failed: failure=Forbidden caller_mission=%r "
+                    "does not own the task; nothing published signal=%s task_id=%s",
+                    mission_id,
+                    signal,
                     task_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
-
-            action_lower = action_name.lower()
-            payload = json.dumps({
-                "action": action_lower,
-                "task_id": task_id,
-                "published_at_ns": time.time_ns(),
-            })
-            await self._redis_client.publish(f"signal_ch:{task_id}", payload)
-            timer.mark("redis_publish")
-            last_mark = "redis_publish"
-            logger.debug(
-                "[perf] SendSignal: %s path=redis total=%.2fms action=%s task_id=%s",
-                timer.format_steps(),
-                timer.total_ms(),
-                action_name,
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
+            if not mission_id:
+                # TODO(validate): CANCEL-NO-MISSION a cancel without x-mission-id skips the owner check
+                logger.warning(
+                    "[VALIDATE CANCEL-NO-MISSION] cancel without x-mission-id accepted unchecked task_id=%s",
+                    task_id,
+                    extra=log_extra,
+                )
+            # TODO(validate): SIGNAL-PUB SendSignal publishes without the local registry
+            logger.info(
+                "[VALIDATE SIGNAL-PUB] SendSignal published: signal=%s idem_exists=%s receivers=%s task_id=%s",
+                signal,
+                idem_exists,
+                receivers,
                 task_id,
                 extra=log_extra,
             )
-            return gateway_pb2.ClientSignalResponse(success=True, task_id=task_id)
+            if not idem_exists:
+                logger.warning(
+                    "[gateway] SendSignal_failed: failure=TaskNotFound at_step=%s elapsed_ms=%.2f signal=%s "
+                    "task_id=%s; tombstone kept for a later StartStream",
+                    last_mark,
+                    timer.elapsed_now_ms(),
+                    signal,
+                    task_id,
+                    extra=log_extra,
+                )
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
+            logger.debug(
+                "[perf] SendSignal: %s path=redis total=%.2fms signal=%s task_id=%s",
+                timer.format_steps(),
+                timer.total_ms(),
+                signal,
+                task_id,
+                extra=log_extra,
+            )
+            return gateway_dto_pb2.SendSignalResponse(success=True, task_id=task_id)
 
-        except Exception as exc:
-            logger.warning(
-                "[gateway] SendSignal_failed: failure=%s at_step=%s elapsed_ms=%.2f action=%s task_id=%s",
+        except RedisError as exc:
+            # The response has no reason field: the log is the only place the cause is recorded.
+            logger.error(
+                "[gateway] SendSignal_failed: failure=RedisUnavailable (%s) at_step=%s elapsed_ms=%.2f signal=%s "
+                "task_id=%s; signal not delivered",
                 type(exc).__name__,
                 last_mark,
                 timer.elapsed_now_ms(),
-                action_name,
+                signal,
                 task_id,
                 extra=log_extra,
             )
-            return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
+            return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
+        except Exception as exc:
+            logger.warning(
+                "[gateway] SendSignal_failed: failure=%s at_step=%s elapsed_ms=%.2f signal=%s task_id=%s",
+                type(exc).__name__,
+                last_mark,
+                timer.elapsed_now_ms(),
+                signal,
+                task_id,
+                extra=log_extra,
+            )
+            return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
 
     async def _consume_from_redis(
         self,
@@ -596,7 +677,7 @@ class GatewayServicer:
         *,
         resume: bool = False,
     ) -> AsyncGenerator:
-        """Zero-copy read from Redis Stream into ``StreamClient`` messages.
+        """Zero-copy read from Redis Stream into ``StreamResponse`` messages.
 
         Always terminates with an explicit ``stream.end`` sentinel.
 
@@ -608,7 +689,7 @@ class GatewayServicer:
                 cursor, and label frames from the stored seq so trim gaps surface.
 
         Yields:
-            StreamClient messages.
+            StreamResponse messages.
         """
         t0 = time.perf_counter_ns()
         reader = ProtoStreamReader(task_id, self._redis_client)
@@ -634,7 +715,7 @@ class GatewayServicer:
                 )
                 first = False
             seq = reader._last_seq + 1 if resume else seq + 1  # ruff: ignore[private-member-access]
-            yield gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=struct_data)
+            yield gateway_messages_pb2.StreamResponse(seq=seq, task_id=task_id, data=struct_data)
 
         # Reader EOS — emit an explicit stream.end so every stream ends uniformly.
         t_after_reader = time.perf_counter_ns()
@@ -667,7 +748,7 @@ class GatewayServicer:
             from_seq: Resume point.
 
         Yields:
-            StreamClient messages, then a terminal sentinel on idle timeout.
+            StreamResponse messages, then a terminal sentinel on idle timeout.
         """
         idle = get_gateway_settings().stream.read_idle_timeout_s
         reader = aiter(self._consume_from_redis(task_id, from_seq))
@@ -709,7 +790,7 @@ class GatewayServicer:
                 return
             yield resp
 
-    async def _dial_consumer(  # ruff: ignore[complex-structure]
+    async def _dial_consumer(  # ruff: ignore[complex-structure, too-many-branches]
         self,
         task_id: str,
         mission_id: str,
@@ -722,7 +803,7 @@ class GatewayServicer:
         ``ModuleRunner`` → drain from seq 0). If the BiDi dies before the stream
         is fully delivered and the module is still producing, re-dial the SAME
         address in resume mode (``stream.resume`` → consumer replies with its
-        ``from_seq`` → drain from that cursor, deduping the Redis queue) with
+        cursor in ``seq`` → drain from that cursor, deduping the Redis queue) with
         jittered backoff until the client returns or the reconnect window
         (``DIGITALKIN_GATEWAY_DIAL_BACK_RECONNECT_WINDOW_S``) elapses. The module
         runs as a separate task, spawned exactly once, so it keeps writing to
@@ -783,6 +864,13 @@ class GatewayServicer:
                 await asyncio.sleep(max(0.0, delay))
                 resume = True
         finally:
+            if not module_spawned:
+                # TODO(validate): IDEM-RELEASE idem is released when the dial fails before runner spawn
+                logger.info("[VALIDATE IDEM-RELEASE] dial failed before runner spawn; releasing idem", extra=log_extra)
+                try:
+                    await self._idempotency.release(task_id)
+                except RedisError:
+                    logger.exception("idem release after failed dial failed", extra=log_extra)
             # End-of-stream cleanup (once). Output stream is left intact for replay.
             try:
                 removed = await self._registry.unregister(task_id)
@@ -806,7 +894,7 @@ class GatewayServicer:
         Fresh (``resume=False``): sends ``stream.init``, spawns the
         ``ModuleRunner`` on the consumer's first reply (calling
         ``on_runner_spawn``), drains from seq 0. Resume: sends ``stream.resume``,
-        reads the consumer's cursor from the first reply's ``from_seq``, skips
+        reads the consumer's cursor from the first reply's ``seq``, skips
         the runner, drains from that cursor. Releases the channel before
         returning; does NOT unregister the session (the caller owns lifecycle).
 
@@ -912,18 +1000,18 @@ class GatewayServicer:
             await release()
             return False
 
-        # Outbound is StreamServer, inbound is StreamClient — both share
-        # field tags so re-wrapping ``_consume_from_redis`` output is a rename.
+        # Dialing out, this gateway is the gRPC client: outbound is StreamRequest, inbound
+        # StreamResponse — both share field tags so re-wrapping ``_consume_from_redis`` output is a rename.
         handshake = "stream.resume" if resume else "stream.init"
         init_struct = struct_pb2.Struct()
         init_struct.update({"root": {"protocol": handshake}})
-        init_server = gateway_pb2.StreamServer(seq=0, task_id=task_id, data=init_struct)
+        init_request = gateway_messages_pb2.StreamRequest(from_seq=0, task_id=task_id, data=init_struct)
 
         # Gate the output drain on the consumer's first reply (query, or cursor on resume).
         output_started = asyncio.Event()
         # Set when ``_outgoing()`` exits; bounds the inbound close wait.
         outgoing_done = asyncio.Event()
-        # Consumer's resume cursor, captured from the first reply's ``from_seq``.
+        # Consumer's resume cursor, captured from the first reply's ``seq``.
         resume_cursor = 0
         # Set once the reader reaches EOS and stream.end is delivered to the consumer.
         delivered_eos = False
@@ -931,7 +1019,7 @@ class GatewayServicer:
         async def _outgoing() -> AsyncGenerator:
             nonlocal delivered_eos
             try:
-                yield init_server
+                yield init_request
                 logger.info(
                     "→ %s sent, waiting for consumer reply before draining outputs",
                     handshake,
@@ -983,11 +1071,11 @@ class GatewayServicer:
                             ),
                             self._sentinel(0, task_id, "stream.end"),
                         ):
-                            yield gateway_pb2.StreamServer(task_id=task_id, seq=sc.from_seq, data=sc.data)
+                            yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=sc.seq, data=sc.data)
                         return
-                    yield gateway_pb2.StreamServer(
+                    yield gateway_messages_pb2.StreamRequest(
                         task_id=task_id,
-                        seq=cli_msg.from_seq,
+                        from_seq=cli_msg.seq,
                         data=cli_msg.data,
                     )
             finally:
@@ -1041,11 +1129,11 @@ class GatewayServicer:
                     )
                     break
 
-                # Resume: first reply carries the cursor in ``from_seq`` (empty
+                # Resume: first reply carries the cursor in ``seq`` (empty
                 # data), so it must be handled before the data gate below.
                 if first and resume:
                     limit = get_gateway_settings().stream.from_seq_limit
-                    resume_cursor = min(upstream.from_seq, limit)
+                    resume_cursor = min(upstream.seq, limit)
                     logger.info(
                         "← Consumer resume cursor=%d received — resuming output (no re-run)",
                         resume_cursor,
@@ -1083,12 +1171,13 @@ class GatewayServicer:
                     output_started.set()
                     first = False
                     continue
-                # Follow-up multi-turn input → task's input stream.
-                with contextlib.suppress(RedisError):
-                    await self._redis_client.xadd(
-                        f"task:{task_id}:input",
-                        {"pb": upstream.data.SerializeToString()},
-                    )
+                # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
+                logger.info(
+                    "[VALIDATE NO-INPUT] Dial-back follow-up input is not used yet; dropped bytes=%d keys=%s",
+                    upstream.data.ByteSize(),
+                    list(upstream.data.fields),
+                    extra=log_extra,
+                )
         except grpc.aio.AioRpcError as exc:
             code_name = exc.code().name
             details = exc.details() or ""

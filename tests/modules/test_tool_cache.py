@@ -314,6 +314,8 @@ class TestResolvedToolsNotPersisted:
         assert "setup-123" in cache.entries
         assert [t.name for t in cache.entries["setup-123"].tools] == ["search"]
         registry.get_setup.assert_awaited()
+        # The remote module validates GetModule*Request.module_id, so the resolved id must ride along.
+        assert communication.get_module_schemas.await_args.kwargs["module_id"] == "tool-123"
 
     @pytest.mark.asyncio
     async def test_resolved_tools_excluded_from_model_dump(self, sample_tool_module_info: ToolModuleInfo) -> None:
@@ -485,9 +487,7 @@ class TestResolvedToolsCacheBehavior:
         assert len(setup.resolved_tools) == 2
 
     @pytest.mark.asyncio
-    async def test_no_registry_keeps_prepopulated_resolved_tools(
-        self, sample_tool_module_info: ToolModuleInfo
-    ) -> None:
+    async def test_no_registry_keeps_prepopulated_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Embedded/degraded path: with no registry, a pre-populated entry is kept and served."""
 
         class TestSetup(SetupModel):

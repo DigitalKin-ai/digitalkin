@@ -26,7 +26,7 @@ pytestmark = [
 ]
 
 
-class _FakeRedisClient:
+class _FakeRedisClient:  # ruff: ignore[too-many-public-methods] — mirrors RedisClient
     """Full adapter matching RedisClient's public interface for fakeredis."""
 
     def __init__(self) -> None:
@@ -172,7 +172,7 @@ class TestStringOps:
 
 
 class TestHashOps:
-    """HSET/HGETALL round-trip, used by RedisStateManager and checkpoints."""
+    """HSET/HGETALL round-trip."""
 
     async def test_hset_hgetall_roundtrip(self, client: _FakeRedisClient) -> None:
         await client.hset("hash:1", {"field1": "val1", "field2": "val2"})
@@ -226,7 +226,7 @@ class TestStreamOps:
         await client.xadd("stream:3", {"seq": "2"})
         result = await client.xread({"stream:3": "0-0"}, count=10, block=0)
         assert len(result) == 1
-        stream_name, entries = result[0]
+        _stream_name, entries = result[0]
         assert len(entries) == 2
 
     async def test_xread_empty_stream_returns_none_on_timeout(self, client: _FakeRedisClient) -> None:
@@ -244,11 +244,11 @@ class TestStreamOps:
         assert fields[b"seq"] == b"3"
 
     async def test_xadd_with_maxlen(self, client: _FakeRedisClient) -> None:
-        for i in range(100):
+        for i in range(500):
             await client.xadd("stream:capped", {"i": str(i)}, maxlen=50)
         length = await client.xlen("stream:capped")
-        # approximate trimming: may be slightly above maxlen
-        assert length <= 60
+        # `~ MAXLEN` trims whole macro nodes (100 entries by default): bounded, not exact.
+        assert 50 <= length <= 150
 
     async def test_xlen_nonexistent_stream(self, client: _FakeRedisClient) -> None:
         length = await client.xlen("stream:none")
@@ -447,7 +447,7 @@ class TestPipeline:
         assert results[3] == b"v2"
 
     async def test_pipeline_hset_and_expire(self, client: _FakeRedisClient) -> None:
-        """Atomic HSET + EXPIRE pattern used by RedisStateManager."""
+        """Atomic HSET + EXPIRE pattern."""
         pipe = client.pipeline()
         pipe.hset("pipe:hash", mapping={"status": "running"})
         pipe.expire("pipe:hash", 3600)
@@ -552,7 +552,7 @@ class TestPropertyBased:
 
         all_members = {}
         for i in range(30):
-            score = random.uniform(0, 100)
+            score = random.uniform(0, 100)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
             all_members[f"z{i}"] = score
         await client.zadd("prop:zs", all_members)
 

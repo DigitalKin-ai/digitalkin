@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
 from digitalkin.logger import logger
 from digitalkin.models.services.registry import (
+    RegistryModuleType,
     RegistrySetupStatus,
     RegistrySortBy,
     RegistryVisibility,
@@ -36,7 +37,7 @@ class GetAction(RegistryAction):
         """Read the setup (always its current version), refusing a foreign object type.
 
         Returns:
-            The setup with its current version, status and visibility.
+            The setup with its current version, status and visibility, and a service's key map.
         """
         return await ctx.ensure_kind(self.setup_id)
 
@@ -55,7 +56,6 @@ class SearchAction(RegistryAction):
     this manager's own kind. Filters combine with AND; within one filter the values are OR'd.
     """
 
-    _DOC_PREVIEW_CHARS: ClassVar[int] = 300
     # The service ceiling itself (storage and registry both cap a page at 100), so the toolkit
     # no longer imposes a tighter one of its own.
     _MAX_RESULTS: ClassVar[int] = 100
@@ -71,7 +71,7 @@ class SearchAction(RegistryAction):
     statuses: list[RegistrySetupStatus] | None = Field(
         default=None,
         description="Filter by setup status. Omit for the invocable ones (ready, configuration_succeeded); "
-        'pass e.g. ["failed"] to inspect broken setups.',
+        'pass e.g. ["failed"] to inspect broken setups. "unspecified" and "validating" are not filterable.',
     )
     visibilities: list[RegistryVisibility] | None = Field(
         default=None, description="Filter by visibility (public / private / internal). Omit for no filter."
@@ -87,6 +87,31 @@ class SearchAction(RegistryAction):
     descending: bool = Field(default=False, description="Reverse the sort order.")
     limit: int = Field(default=10, description=f"Max results (default 10, max {_MAX_RESULTS}).", ge=1, le=_MAX_RESULTS)
     offset: int = Field(default=0, description="Skip this many matches before returning results.", ge=0)
+
+    @field_validator("statuses")
+    @classmethod
+    def reject_unfilterable_statuses(
+        cls, statuses: list[RegistrySetupStatus] | None
+    ) -> list[RegistrySetupStatus] | None:
+        """Refuse the statuses the registry cannot filter on.
+
+        ``UNSPECIFIED`` has no proto name to encode and the registry refuses ``VALIDATING``.
+
+        Args:
+            statuses: The requested status filter.
+
+        Returns:
+            The filter, unchanged.
+
+        Raises:
+            ValueError: If the filter holds ``unspecified`` or ``validating``.
+        """
+        if statuses and (RegistrySetupStatus.UNSPECIFIED in statuses or RegistrySetupStatus.VALIDATING in statuses):
+            # TODO(validate): SEARCH-STATUS-FILTER unfilterable statuses are refused before the registry call
+            logger.info("[VALIDATE SEARCH-STATUS-FILTER] unfilterable statuses refused: %s", statuses)
+            msg = '"unspecified" and "validating" cannot be used as a search status filter'
+            raise ValueError(msg)
+        return statuses
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Search invocable setups of the manager's type and trim each row for the LLM.
@@ -125,14 +150,16 @@ class SearchAction(RegistryAction):
         # would both contradict ``total_returned`` and, at exactly ``cap`` rows, promise an empty
         # next page.
         truncated = len(usable) > cap
-        rows = [self._row(setup) for setup in usable[:cap]]
+        rows = [self._row(setup, ctx.module_type) for setup in usable[:cap]]
         return {"total_returned": len(rows), "truncated": truncated, "offset": self.offset, "setups": rows}
 
-    def _row(self, setup: SetupSummary) -> dict[str, Any]:
+    @staticmethod
+    def _row(setup: SetupSummary, module_type: RegistryModuleType) -> dict[str, Any]:
         """Trim one search hit to the fields a caller can act on.
 
         Args:
             setup: The summary returned by the registry.
+            module_type: The manager's object type; only services render a structure map.
 
         Returns:
             The rendered row.
@@ -147,11 +174,16 @@ class SearchAction(RegistryAction):
             "tags": setup.tags,
             "visibility": setup.visibility.value if setup.visibility else None,
             "status": setup.status.value if setup.status else None,
-            "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
+            "documentation": setup.documentation or None,
         }
-        # Only service setups carry a map. Omitting the key rather than rendering an empty
-        # one keeps the feature out of the tools and kins surfaces entirely.
-        if setup.structure:
+        # Only service setups carry a map, so tools and kins rows never show one. A service row
+        # always does, {} included: a caller iterating rows must not meet a missing key.
+        if module_type == RegistryModuleType.SERVICE:
+            if not setup.structure:
+                logger.info(
+                    "[VALIDATE STRUCTROW] service row rendered with an empty structure: setup_id=%s",
+                    setup.setup_id,
+                )  # TODO(validate): remove after prod validation
             row["structure"] = setup.structure
         return row
 
@@ -182,9 +214,10 @@ class UpdateAction(RegistryAction):
     )
     documentation: str | None = Field(
         default=None,
-        description="Free text describing what this instance is for, indexed by ``search``. "
-        "Omit to keep the text the instance already has; pass a string to replace it, or an "
-        "empty string to clear it.",
+        max_length=300,
+        description="Free text describing what this instance is for, indexed by ``search``, at "
+        "most 300 characters. Omit to keep the text the instance already has; pass a string to "
+        "replace it, or an empty string to clear it.",
     )
 
     def _type_payload(self) -> dict[str, Any]:  # ruff: ignore[no-self-use]

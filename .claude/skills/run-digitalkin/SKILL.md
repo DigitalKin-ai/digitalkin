@@ -20,8 +20,8 @@ Chaos tests need the extra profile: `docker compose --profile chaos up -d tests-
 `uv run pytest` works for unit tests only. Integration tests skip or fail without Redis. To run them on the host, start Redis alone and point the SDK at the mapped port:
 
 ```bash
-docker compose up -d tests-redis     # host port 6399 -> container 6379
-DIGITALKIN_REDIS_URL=redis://localhost:6399/0 uv run pytest -m integration
+docker compose up -d tests-redis     # first free host port in 6399-6409 -> container 6379
+DIGITALKIN_REDIS_URL=redis://$(docker compose port tests-redis 6379)/0 uv run pytest -m integration
 ```
 
 Inside the compose network the URL is `redis://tests-redis:6379/0` instead — the host port mapping is not visible from a container.

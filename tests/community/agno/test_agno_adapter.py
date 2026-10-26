@@ -15,8 +15,10 @@ from typing import Any
 
 import pytest
 
+import digitalkin.community.agno  # (real agno loads before the fakes below replace it)
 from digitalkin.models.events import (
     AgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -25,6 +27,7 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SourceCitationEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
     TextMessageCompletedEvent,
@@ -50,6 +53,7 @@ class _FakeRunEvent(str, Enum):
     tool_call_started = "ToolCallStarted"
     tool_call_completed = "ToolCallCompleted"
     tool_call_error = "ToolCallError"
+    custom_event = "CustomEvent"
 
 
 class _FakeTeamRunEvent(str, Enum):
@@ -67,6 +71,7 @@ class _FakeTeamRunEvent(str, Enum):
     tool_call_started = "TeamToolCallStarted"
     tool_call_completed = "TeamToolCallCompleted"
     tool_call_error = "TeamToolCallError"
+    custom_event = "TeamCustomEvent"
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +112,7 @@ _EVENT_DEFAULTS: dict[str, Any] = {
     "parent_run_id": None,
     "content": None,
     "reasoning_content": None,
+    "citations": None,
     "tool": None,
     "tools": None,
     "requirements": None,
@@ -122,6 +128,7 @@ _TOOL_DEFAULTS: dict[str, Any] = {
     "tool_name": None,
     "tool_args": None,
     "result": None,
+    "tool_call_error": None,
 }
 
 _TOOL_EXEC_DEFAULTS: dict[str, Any] = {
@@ -169,6 +176,8 @@ def _open_reasoning_id(adapter: Any) -> str | None:
 
 def test_import_error_when_agno_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """First conversion raises ImportError with install hint if agno absent."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
     for key in ("agno", "agno.run", "agno.run.agent", "agno.run.team"):
         monkeypatch.delitem(sys.modules, key, raising=False)
 
@@ -180,8 +189,6 @@ def test_import_error_when_agno_missing(monkeypatch: pytest.MonkeyPatch) -> None
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr("builtins.__import__", _blocked_import)
-
-    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
     event = _make_event("anything")
@@ -335,6 +342,38 @@ def test_run_completed_deduplicates() -> None:
         _make_event(_FakeRunEvent.run_completed, run_id="r1", content=None),
     )
     assert duplicate == []
+
+
+def test_top_level_run_started_resets_dedup_state() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_completed, run_id="r1", content=None))
+    adapter._cited_urls.add("https://a")
+    adapter._closed_tool_call_ids.add("tc1")
+    assert adapter._completed_run_ids == {"r1"}
+
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r2"))
+
+    assert adapter._cited_urls == set()
+    assert adapter._closed_tool_call_ids == set()
+    assert adapter._completed_run_ids == set()
+
+
+def test_nested_or_duplicate_run_started_keeps_dedup_state() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    adapter._cited_urls.add("https://a")
+    adapter._closed_tool_call_ids.add("tc1")
+
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="r1"))
+
+    assert adapter._cited_urls == {"https://a"}
+    assert adapter._closed_tool_call_ids == {"tc1"}
 
 
 def test_nested_run_started_emits_subagent_not_a_second_run() -> None:
@@ -744,8 +783,8 @@ def test_run_completed_closes_subagents_before_finishing() -> None:
     assert adapter._subagents == {}
 
 
-def test_run_error_closes_subagents() -> None:
-    """A failed run must not leave a step dangling for the client's reconnect preamble."""
+def test_run_error_abandons_subagents_and_tool_calls() -> None:
+    """AG-UI 1.0: after RUN_ERROR open invocations are abandoned, never closed as a success."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -753,11 +792,15 @@ def test_run_error_closes_subagents() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
     )
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.tool_call_started, run_id="m1", tool=_make_tool(tool_call_id="c1", tool_name="t")),
+    )
 
     result = adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_error, content="boom"))
 
-    assert [type(e) for e in result] == [SubagentFinishedEvent, RunErrorEvent]
+    assert [type(e) for e in result] == [RunErrorEvent]
     assert adapter._subagents == {}
+    assert adapter._open_tool_calls == {}
 
 
 def test_flush_closes_subagents() -> None:
@@ -949,7 +992,7 @@ def test_reasoning_content_delta_passes_through() -> None:
     assert result[0].reasoning_id == _open_reasoning_id(adapter)
 
 
-def test_reasoning_content_delta_without_content_defaults_to_empty() -> None:
+def test_reasoning_content_delta_without_content_emits_nothing() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -957,8 +1000,21 @@ def test_reasoning_content_delta_without_content_defaults_to_empty() -> None:
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.reasoning_content_delta, reasoning_content=None),
     )
-    assert isinstance(result[0], ReasoningContentDeltaEvent)
-    assert result[0].delta == ""
+    assert result == []
+
+
+def test_reasoning_content_delta_without_reasoning_started_opens_one() -> None:
+    """AG-UI 1.0 fails a run on content for an unopened reasoning message."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.reasoning_content_delta, reasoning_content="hmm"),
+    )
+    started, delta = result
+    assert isinstance(started, ReasoningStartedEvent)
+    assert isinstance(delta, ReasoningContentDeltaEvent)
+    assert started.reasoning_id == delta.reasoning_id == _open_reasoning_id(adapter)
 
 
 def test_reasoning_step_reuses_active_reasoning() -> None:
@@ -1228,6 +1284,24 @@ def test_tool_call_error_after_completed_is_deduped() -> None:
     duplicate = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.tool_call_error, tool=tool, content="boom"),
     )
+    assert duplicate == []
+
+
+@pytest.mark.regression
+def test_flagged_tool_call_completed_becomes_tool_call_error() -> None:
+    """Agno flags a raised tool on the completed event; the later tool_call_error is deduped."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(tool_call_id="tc1", tool_name="search", result='{"error": "[X] boom"}', tool_call_error=True)
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_completed, tool=tool, content="x"))
+    duplicate = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_error, tool=tool, content="x"))
+
+    assert len(result) == 1
+    assert isinstance(result[0], ToolCallErrorEvent)
+    assert result[0].tool is not None
+    assert result[0].tool.tool_call_id == "tc1"
+    assert result[0].error_message == '{"error": "[X] boom"}'
     assert duplicate == []
 
 
@@ -1977,3 +2051,126 @@ def test_event_types_use_enum_values_in_serialization() -> None:
     adapter = AgnoStreamAdapter()
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
     assert result[0].event == AgentRunEvent.RUN_STARTED.value
+
+
+# ── Source citations ────────────────────────────────────────────────────────
+
+
+def _citations(*urls: tuple[str | None, str | None]) -> types.SimpleNamespace:
+    """Build a namespace mimicking agno ``Citations`` with ``UrlCitation`` entries."""
+    return types.SimpleNamespace(urls=[types.SimpleNamespace(url=u, title=t) for u, t in urls])
+
+
+def test_native_source_citation_custom_event() -> None:
+    """An agno tool yielding ``CustomEvent(name="source_citation")`` maps to a SourceCitationEvent."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.custom_event,
+            run_id="r1",
+            name="source_citation",
+            value={"url": "https://docs.digitalkin.ai/pricing", "title": "Pricing", "description": "Pro is 49 €"},
+        )
+    )
+    assert [type(e) for e in result] == [SourceCitationEvent]
+    assert result[0].value.model_dump(mode="json") == {
+        "url": "https://docs.digitalkin.ai/pricing",
+        "title": "Pricing",
+        "description": "Pro is 49 €",
+    }
+    assert result[0].subagent_run_id is None
+
+
+def test_native_generic_custom_event() -> None:
+    """Any other custom event name is forwarded as a generic CustomEvent."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.custom_event, run_id="r1", name="progress", value={"pct": 40})
+    )
+    assert [type(e) for e in result] == [CustomEvent]
+    assert result[0].name == "progress"
+    assert result[0].value == {"pct": 40}
+
+
+@pytest.mark.parametrize(
+    "attrs",
+    [
+        {"name": "source_citation", "value": {"url": "not-a-url"}},
+        {"name": "source_citation", "value": None},
+        {"value": {"url": "https://x.io"}},
+    ],
+)
+def test_native_custom_event_dropped(attrs: dict[str, Any]) -> None:
+    """An invalid source or an unnamed custom event is dropped."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    assert adapter.to_digitalkin_events(_make_event(_FakeRunEvent.custom_event, run_id="r1", **attrs)) == []
+
+
+def test_native_custom_event_attributed_to_subagent() -> None:
+    """A citation made inside a delegated run carries that run's ``subagent_run_id``."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="member-r1", parent_run_id="team-r1", agent_name="Alice")
+    )
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.custom_event,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            agent_name="Alice",
+            name="source_citation",
+            value={"url": "https://x.io/a"},
+        )
+    )
+    assert result[0].subagent_run_id == "member-r1"
+    assert result[0].metadata["name"] == "Alice"
+
+
+def test_model_citations_emitted_once_per_url() -> None:
+    """Model-native citations become one event per URL, deduplicated across deltas and completion."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    first = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            run_id="r1",
+            content="Hello",
+            citations=_citations(("https://a.io/", "A"), (None, "no url"), ("https://b.io/", None)),
+        )
+    )
+    assert [type(e) for e in first][:2] == [SourceCitationEvent, SourceCitationEvent]
+    assert [e.value.model_dump(mode="json", exclude_none=True) for e in first[:2]] == [
+        {"url": "https://a.io/", "title": "A"},
+        {"url": "https://b.io/"},
+    ]
+
+    again = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content, run_id="r1", content=" world", citations=_citations(("https://a.io/", "A"))
+        )
+    )
+    assert not any(isinstance(e, SourceCitationEvent) for e in again)
+
+    done = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_completed,
+            run_id="r1",
+            citations=_citations(("https://a.io/", "A"), ("https://c.io/", "C")),
+        )
+    )
+    kinds = [type(e) for e in done]
+    assert kinds[0] is SourceCitationEvent
+    assert done[0].value.title == "C"
+    assert kinds.count(SourceCitationEvent) == 1
+    assert kinds[-1] is RunCompletedEvent

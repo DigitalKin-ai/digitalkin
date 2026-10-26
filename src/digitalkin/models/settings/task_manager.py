@@ -15,7 +15,6 @@ class TaskManagerSettings(BaseSettings):
 
     max_concurrent_tasks: int = Field(default=500, gt=0, description="Max tasks executing concurrently.")
     task_wait_timeout: float = Field(default=30.0, description="Seconds a caller waits for an execution slot.")
-    stream_drain_timeout: float = Field(default=2.0, description="Seconds to drain a stream on task teardown.")
     max_queued_tasks: int = Field(default=5000, description="Max tasks admitted and waiting for a slot.")
     admission_timeout: float = Field(default=5.0, description="Seconds a task waits for system admission.")
     queue_slot_timeout: float = Field(default=600.0, description="Max seconds an admitted task waits in the queue.")

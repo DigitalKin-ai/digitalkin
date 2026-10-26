@@ -35,6 +35,7 @@ class DefaultCommunication(CommunicationStrategy):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, dict]:
         """Get module schemas (local implementation returns empty schemas).
@@ -42,18 +43,18 @@ class DefaultCommunication(CommunicationStrategy):
         Args:
             module_address: Target module address
             module_port: Target module port
+            module_id: Target module ID
             llm_format: Return LLM-friendly format
 
         Returns:
             Empty schemas dictionary
         """
         logger.debug(
-            "DefaultCommunication.get_module_schemas called (returns empty)",
-            extra={
-                "module_address": module_address,
-                "module_port": module_port,
-                "llm_format": llm_format,
-            },
+            "DefaultCommunication.get_module_schemas called for %s (%s:%d, llm_format=%s) — returns empty",
+            module_id,
+            module_address,
+            module_port,
+            llm_format,
         )
         return {
             "input": {},
