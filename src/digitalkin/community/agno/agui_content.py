@@ -69,9 +69,8 @@ class AgUiContent:
                     f"[Attached file url={source.value} (mime={source.mime_type or 'unknown'}, filename={filename})]"
                 )
             else:
-                # TODO(validate): AGUI-PART-DROPPED attachments with neither a file id nor a url are logged
                 logger.warning(
-                    "[VALIDATE AGUI-PART-DROPPED] %s part with neither a file id nor a url (%s source, %s, %d chars)",
+                    "%s part with neither a file id nor a url (%s source, %s, %d chars)",
                     part.type,
                     source.type,
                     source.mime_type,
@@ -107,9 +106,8 @@ class AgUiContent:
                     )
                 except binascii.Error as error:
                     logger.info("Inline image %s is not valid base64: %s", file_id, error)
-            # TODO(validate): AGUI-PART-DROPPED oversized or invalid inline images are logged, never repr'd
             logger.warning(
-                "[VALIDATE AGUI-PART-DROPPED] inline image %s (%s, %d chars) not passed to the model",
+                "inline image %s (%s, %d chars) not passed to the model",
                 file_id,
                 source.mime_type,
                 len(source.value),

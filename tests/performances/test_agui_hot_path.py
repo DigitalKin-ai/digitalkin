@@ -164,7 +164,13 @@ class TestAgUiHotPath:
             "TOOL_CALL_START_ARGS",
             ToolCallStartedEvent(
                 event=AgentRunEvent.TOOL_CALL_STARTED,
-                tool=ToolInfo(tool_call_id="tc1", tool_name="search", tool_args={"q": "weather in Lyon", "n": 3}),
+                tool=ToolInfo(
+                    tool_call_id="tc1",
+                    tool_name="search",
+                    tool_args={"q": "weather in Lyon", "n": 3},
+                    tool_display_name="Web search",
+                    function_display_name="Search",
+                ),
             ),
         )
 

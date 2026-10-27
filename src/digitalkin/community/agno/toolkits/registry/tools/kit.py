@@ -51,6 +51,7 @@ class ToolsManager(RegistryObjectToolKit):
                 "tool (the 'tool' action)."
             ),
             entrypoint=self.tools_manager,
+            display_name="Tools Manager",
         )
 
     async def tools_manager(self, action: ToolActions | None = None, **fields: Any) -> str:

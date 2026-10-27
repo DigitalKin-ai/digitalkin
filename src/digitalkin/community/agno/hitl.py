@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from agno.agent import Agent
     from agno.models.message import Message as AgnoMessage
 
+    from digitalkin.community.agno.toolkits.base import DkToolkit
     from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
     from digitalkin.models.events import BaseAgentRunEvent
     from digitalkin.models.module import ModuleContext
@@ -118,9 +119,8 @@ class PausedRunStore:
         if history:
             payload["messages"] = [m for m in messages if not m.get("from_history")]
         events = payload.pop("events", None) or []
-        # TODO(validate): HITL-TRIM paused runs stored without history messages/events still resume
         logger.info(
-            "[VALIDATE HITL-TRIM] thread_id=%s dropped %d history message(s) %s and %d event(s)",
+            "thread_id=%s dropped %d history message(s) %s and %d event(s)",
             thread_id,
             len(history),
             [(m.get("id"), m.get("role")) for m in history],
@@ -193,9 +193,8 @@ class HitlEvents:
                     if isinstance(part, dict) and part.get("type") == "text":
                         texts.append(part.get("text") or "")
                     else:
-                        # TODO(validate): AGUI-PART-DROPPED non-text content is logged, never repr'd into text
                         logger.info(
-                            "[VALIDATE AGUI-PART-DROPPED] agno message %s (%s): non-text part not converted: %.500r",
+                            "agno message %s (%s): non-text part not converted: %.500r",
                             msg.id,
                             msg.role,
                             part,
@@ -435,6 +434,38 @@ class AgnoHitlRunner:
         from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
 
         return LoadManager.find(tools)
+
+    def _toolkit_map(self) -> dict[str, DkToolkit]:
+        """Map each function of the agent's live DkToolkits to its toolkit, to label tool calls.
+
+        Built from the current tool list, so a toolkit loaded by ``load_manager`` is labelled on
+        the auto-continue that follows. Team members' tools are not listed and fall back to
+        humanized names in the adapter.
+
+        Returns:
+            Function name -> owning toolkit.
+        """
+        from digitalkin.community.agno.toolkits.base import DkToolkit
+
+        tools = vars(self._agent).get("tools")
+        if callable(tools) and not isinstance(tools, list):
+            # Labels are cosmetic: a custom factory that needs a real run context must not fail the run.
+            try:
+                tools = tools(None)
+            except Exception:
+                logger.warning(
+                    "AgnoHitlRunner: tools factory failed without a run context, tool labels fall back",
+                    exc_info=True,
+                )
+                return {}
+        if not isinstance(tools, list):
+            return {}
+        return {
+            name: tool
+            for tool in tools
+            if isinstance(tool, DkToolkit)
+            for name in (*tool.functions, *tool.async_functions)
+        }
 
     async def run(
         self,
@@ -744,9 +775,8 @@ class AgnoHitlRunner:
                     continue
                 except binascii.Error as exc:
                     logger.info("Inline image %s of message %s is not valid base64: %s", part.id, message_id, exc)
-            # TODO(validate): AGUI-PART-DROPPED parts the model cannot receive are logged, never repr'd
             logger.info(
-                "[VALIDATE AGUI-PART-DROPPED] message %s: %s part %s (%s source, %s, %d chars) not passed to the model",
+                "message %s: %s part %s (%s source, %s, %d chars) not passed to the model",
                 message_id,
                 part.type,
                 part.id,
@@ -786,7 +816,7 @@ class AgnoHitlRunner:
 
         try:
             for _ in range(20):
-                adapter = AgnoStreamAdapter()
+                adapter = AgnoStreamAdapter(toolkits=self._toolkit_map())
                 final_run_output: RunOutput | TeamRunOutput | None = None
 
                 async for raw_event in stream:

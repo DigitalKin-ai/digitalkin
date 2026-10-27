@@ -14,7 +14,7 @@ managers, so a caller reads ``metadata.success`` instead of pattern-matching the
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -49,9 +49,22 @@ class LoadManager(DkToolkit):
             tools=[self.load_manager],
             context=context,
             external_execution_required_tools=[self.load_manager.__name__],
+            display_name="Load Manager",
         )
         # The live list the agent's tools factory splats; bound by DefaultToolkits.build.
         self._base_tools: list[Any] | None = None
+
+    def display_labels(self, function_name: str, tool_args: dict[str, Any] | str | None) -> tuple[str, str | None]:  # ruff: ignore[unused-method-argument]
+        """Label the loader and the load action this call selects.
+
+        Args:
+            function_name: Technical name of the called function (``load_manager``).
+            tool_args: Call arguments carrying the ``action`` discriminator.
+
+        Returns:
+            ``(loader label, action label)``.
+        """
+        return self.display_name, self.action_label(tool_args, LoadActions)
 
     @property
     def tool_name(self) -> str:
@@ -162,9 +175,7 @@ class LoadManager(DkToolkit):
             # out-of-union action — e.g. 'service' — can self-correct, instead of getting an opaque
             # "invalid" with no enumeration. ``LoadActions`` is a single action class today and a
             # discriminated union once a second loader exists; handle both.
-            union = get_args(LoadActions)
-            members = get_args(union[0]) if union else (LoadActions,)
-            accepted = sorted(str(member.model_fields["action"].default) for member in members)
+            accepted = sorted(str(member.model_fields["action"].default) for member in self.action_members(LoadActions))
             return self._fail(f"invalid load action; accepted actions: {', '.join(accepted)}", tool="load")
         ctx = LoadActionCtx(context=self._ctx, base_tools=self._base_tools, notify=self._notify)
         try:

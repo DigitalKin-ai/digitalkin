@@ -388,10 +388,10 @@ class StorageStrategy(BaseStrategy, ABC):
         if visibilities and Visibility.UNSPECIFIED in visibilities:
             # The storage service refuses UNSPECIFIED in a visibility filter (INVALID_ARGUMENT).
             logger.info(
-                "[VALIDATE VISFILTER] UNSPECIFIED dropped from the visibility filter: collection=%s filter=%s",
+                "UNSPECIFIED dropped from the visibility filter: collection=%s filter=%s",
                 collection,
                 visibilities,
-            )  # TODO(validate): remove after prod validation
+            )
             visibilities = [v for v in visibilities if v is not Visibility.UNSPECIFIED]
         return await self._list(collection, self._resolve_context(context), visibilities, record_id, limit, offset)
 
@@ -453,7 +453,6 @@ class StorageStrategy(BaseStrategy, ABC):
             updated = await self._update(collection, record_id, validated_data, ctx, visibility)
             if updated is not None:
                 return updated
-            # TODO(validate): UPSERT-UPDATE-FIRST upsert updates first and creates only on a miss
-            logger.info("[VALIDATE UPSERT-UPDATE-FIRST] no record to update, creating %s:%s", collection, record_id)
+            logger.info("no record to update, creating %s:%s", collection, record_id)
             record = self._create_storage_record(collection, record_id, validated_data, data_type, ctx, visibility)
             return await self._store(record)

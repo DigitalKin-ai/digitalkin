@@ -17,6 +17,21 @@ This page covers `CUSTOM` only; every other AG-UI event and the pipeline state a
 - `subagentRunId` and `metadata` are present only when the event was produced inside a delegated subagent run. Group on `subagentRunId`, like text and tool events.
 - Null fields are omitted.
 
+## Mission title
+
+`name: "mission_title"`, `value: {"title": "<title>" | null}`. Emitted at most once per mission, never updated afterwards (a manual rename is the back's business).
+
+- A trigger proposes the title by overriding `AgUiMixin.mission_title(context) -> str | None`. Without an override, no title task runs.
+- The hook runs as a background task on each `RUN_STARTED` until the mission has a title: `RUN_FINISHED` waits for it, `RUN_ERROR` cancels it.
+- A None or empty result means "not enough context yet": nothing is emitted (the back shows the user prompt) and the
+  next run tries again. The SDK emits the returned string as is: clean it (strip, length) in the hook.
+- A hook that raises, returns an invalid title or takes longer than `DIGITALKIN_AGUI_MISSION_TITLE_TIMEOUT` seconds
+  (default 15) is logged and counts as an empty result. The timeout also bounds how long `RUN_FINISHED` waits.
+- The run that reaches `DIGITALKIN_AGUI_MISSION_TITLE_ATTEMPTS` empty results (default 3) emits `{"title": null}`: every attempt is used, no title will come, the back keeps its own default. The hook is not called again.
+- A new `RUN_STARTED` in the same task cancels the previous run's title task. Two tasks of one mission running at once
+  can still both title it: the storage has no atomic update.
+- State lives in the SDK-owned `mission` storage collection (record `mission`, `MissionRecord`: `title`, `title_attempts`), mission-scoped and registered on every module by `ServicesConfig`.
+
 ## Sources
 
 Sources are no longer a custom event: they travel as the `sources` activity ([`agui_events.md#sources`](agui_events.md#sources)). The `source_citation` name is still accepted as an *input* (agno `CustomEvent`, `SourceCitationEvent`) and converted.

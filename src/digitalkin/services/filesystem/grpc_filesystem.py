@@ -291,8 +291,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         async with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_dto_pb2.UpdateFileRequest(
-                # TODO(validate): remove after prod validation
-                # [VALIDATE FSCTX] update/delete now honour the caller's context instead of forcing MISSIONS
+                # update/delete now honour the caller's context instead of forcing MISSIONS
                 context=self._context_enum(context),
                 file_id=file_id,
                 new_name=new_name,
@@ -331,8 +330,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         logger.debug("debug:delete_files permanent=%s force=%s", permanent, force)
         async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_dto_pb2.DeleteFilesRequest(
-                # TODO(validate): remove after prod validation
-                # [VALIDATE FSCTX] update/delete now honour the caller's context instead of forcing MISSIONS
+                # update/delete now honour the caller's context instead of forcing MISSIONS
                 context=self._context_enum(filters.context),
                 filter=self._filter_to_proto(filters),
                 permanent=permanent,

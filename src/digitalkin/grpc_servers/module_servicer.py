@@ -291,12 +291,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         allowed = await self.user_profile.check_resource_access("setup_id", setup_id)
         ids = RequestContext.current()
         if not allowed:
-            # TODO(validate): SETUP-ACCESS setup access is checked before the setup is resolved
-            logger.info("[VALIDATE SETUP-ACCESS] setup access DENIED: setup_id=%s", setup_id, extra=ids)
+            logger.info("setup access DENIED: setup_id=%s", setup_id, extra=ids)
             msg = f"access denied to setup {setup_id}"
             raise PermissionDeniedError(msg)
-        # TODO(validate): SETUP-ACCESS setup access is checked before the setup is resolved
-        logger.info("[VALIDATE SETUP-ACCESS] setup access granted: setup_id=%s", setup_id, extra=ids)
 
     async def resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
@@ -384,8 +381,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         setup_version = request.setup_version
         if not await self.user_profile.check_resource_access("setup_id", setup_version.setup_id):
-            # TODO(validate): SETUP-ACCESS setup access is checked before the setup is resolved
-            logger.info("[VALIDATE SETUP-ACCESS] setup config access DENIED: setup_id=%s", setup_version.setup_id)
+            logger.info("setup config access DENIED: setup_id=%s", setup_version.setup_id)
             await context.abort(grpc.StatusCode.PERMISSION_DENIED, f"access denied to setup {setup_version.setup_id}")
         # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
         self._setup_cache.pop(setup_version.setup_id, None)
@@ -425,10 +421,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except Exception as error:
             logger.exception(
-                "[VALIDATE CFGSTART] config setup module failed to start: setup_version=%s",
+                "config setup module failed to start: setup_version=%s",
                 setup_version.id,
                 extra={"mission_id": request.mission_id},
-            )  # TODO(validate): remove after prod validation
+            )
             await context.abort(grpc.StatusCode.INTERNAL, f"module failed to start config setup: {error}")
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
@@ -445,12 +441,12 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             if status is grpc.StatusCode.OK:
                 status = grpc.StatusCode.INTERNAL
             logger.error(
-                "[VALIDATE CFGCODE] config setup failed: code=%s status=%s message=%s",
+                "config setup failed: code=%s status=%s message=%s",
                 updated_setup_data["code"],
                 status.name,
                 updated_setup_data.get("message"),
                 extra={"job_id": job_id},
-            )  # TODO(validate): remove after prod validation
+            )
             await context.abort(status, updated_setup_data.get("message") or "Config setup failed")
 
         logger.debug("Updated setup data", extra={"job_id": job_id})
@@ -514,10 +510,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         module_id = self.module_class.get_module_id()
         if request.module_id != module_id:
             logger.warning(
-                "[VALIDATE MODID] GetModuleInput refused: requested module_id=%s, this module is %s",
+                "GetModuleInput refused: requested module_id=%s, this module is %s",
                 request.module_id,
                 module_id,
-            )  # TODO(validate): remove after prod validation
+            )
             await context.abort(
                 grpc.StatusCode.NOT_FOUND, f"module {request.module_id} is not served here (this module is {module_id})"
             )

@@ -38,6 +38,16 @@ class FileHistory(BaseModel):
     files: list[FileMetadata] = Field(..., description="List of files")
 
 
+class MissionRecord(BaseModel):
+    """SDK-owned state of one mission, stored in the ``mission`` collection.
+
+    Registered on every module's storage by ``ServicesConfig``.
+    """
+
+    title: str | None = Field(default=None, description="Mission title, None until a run produced one")
+    title_attempts: int = Field(default=0, ge=0, description="Runs that tried to title the mission")
+
+
 class DataType(Enum):
     """Enum defining the types of data that can be stored."""
 

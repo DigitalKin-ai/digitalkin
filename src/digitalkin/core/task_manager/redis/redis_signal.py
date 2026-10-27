@@ -213,9 +213,8 @@ class SharedRedisListener:
             )
             return False
         if session.pending_signal_action or session.cancelled:
-            # TODO(validate): REPEAT-CANCEL repeated cancels are suppressed while a cancel is pending
             logger.info(
-                "[VALIDATE REPEAT-CANCEL] dispatch_skipped: action=%s reason=already_cancelling pending=%s payload=%s",
+                "dispatch_skipped: action=%s reason=already_cancelling pending=%s payload=%s",
                 action,
                 session.pending_signal_action,
                 raw_json,

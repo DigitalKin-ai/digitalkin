@@ -223,8 +223,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             self._raise_on_outcome_error(resp.result)
             return self._build_record_from_proto(resp.result.record)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage CreateRecord permission denied")
+            logger.warning("storage CreateRecord permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
@@ -261,8 +260,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 return None
             self._raise_on_outcome_error(resp.result)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage GetRecord permission denied")
+            logger.warning("storage GetRecord permission denied")
             raise
         except Exception as e:
             if self._is_not_found(e):
@@ -270,10 +268,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             if self._is_circuit_open(e):
                 logger.debug("gRPC GetRecord rejected (circuit open) for %s:%s", collection, record_id)
             else:
-                # TODO(validate): STORAGE-READ-RAISES a failed read raises instead of reading as absent
-                logger.error(
-                    "[VALIDATE STORAGE-READ-RAISES] gRPC GetRecord failed for %s:%s: %s", collection, record_id, e
-                )
+                logger.error("gRPC GetRecord failed for %s:%s: %s", collection, record_id, e)
             msg = f"GetRecord failed for {collection}:{record_id}: {e}"
             raise StorageServiceError(msg) from e
 
@@ -318,8 +313,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             self._raise_on_outcome_error(resp.result)
             return self._build_record_from_proto(resp.result.record)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage UpdateRecord permission denied")
+            logger.warning("storage UpdateRecord permission denied")
             raise
         except Exception as e:
             if self._is_not_found(e):
@@ -327,10 +321,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             if self._is_circuit_open(e):
                 logger.debug("gRPC UpdateRecord rejected (circuit open) for %s:%s", collection, record_id)
             else:
-                # TODO(validate): STORAGE-UPDATE-RAISES a failed update raises instead of reading as a missing record
-                logger.error(
-                    "[VALIDATE STORAGE-UPDATE-RAISES] gRPC UpdateRecord failed for %s:%s: %s", collection, record_id, e
-                )
+                logger.error("gRPC UpdateRecord failed for %s:%s: %s", collection, record_id, e)
             msg = f"UpdateRecord failed for {collection}:{record_id}: {e}"
             raise StorageServiceError(msg) from e
 
@@ -355,8 +346,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 return False
             self._raise_on_outcome_error(resp.result)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage DeleteRecord permission denied")
+            logger.warning("storage DeleteRecord permission denied")
             raise
         except Exception as e:
             # Deleting a record that is already gone is not a failure worth a warning.
@@ -404,15 +394,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         try:
             resp = await self.exec_grpc_query("ListRecords", req)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage ListRecords permission denied")
+            logger.warning("storage ListRecords permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
                 logger.debug("gRPC ListRecords rejected (circuit open) for %s", collection)
             else:
-                # TODO(validate): STORAGE-LIST-RAISES a failed list raises instead of reading as an empty collection
-                logger.error("[VALIDATE STORAGE-LIST-RAISES] gRPC ListRecords failed for %s: %s", collection, e)
+                logger.error("gRPC ListRecords failed for %s: %s", collection, e)
             msg = f"ListRecords failed for {collection}: {e}"
             raise StorageServiceError(msg) from e
 
@@ -438,8 +426,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             )
             resp = await self.exec_grpc_query("DeleteCollection", req)
         except PermissionDeniedError:
-            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
-            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage DeleteCollection permission denied")
+            logger.warning("storage DeleteCollection permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):

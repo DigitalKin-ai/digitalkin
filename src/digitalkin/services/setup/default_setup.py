@@ -113,9 +113,7 @@ class DefaultSetup(SetupStrategy):
         version = setup.current_setup_version
         content = JsonStructure.resolve(version.content, [key])
         if not content:
-            logger.info(
-                "[VALIDATE STRUCTKEY] unresolved structure_key refused: setup_id=%s key=%s", setup.id, key
-            )  # TODO(validate): remove after prod validation
+            logger.info("unresolved structure_key refused: setup_id=%s key=%s", setup.id, key)
             msg = f"setup_id = {setup.id}: no path {key} in the configuration"
             raise SetupServiceError(msg)
         return setup.model_copy(update={"current_setup_version": version.model_copy(update={"content": content})})

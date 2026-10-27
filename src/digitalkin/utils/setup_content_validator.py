@@ -172,9 +172,7 @@ class SetupContentValidator:
             ValueError: It is over 300 characters.
         """
         if len(documentation) > cls._DOCUMENTATION_MAX:
-            logger.info(
-                "[VALIDATE DOCMAX] oversized documentation refused: %d characters", len(documentation)
-            )  # TODO(validate): remove after prod validation
+            logger.info("oversized documentation refused: %d characters", len(documentation))
             msg = f"documentation is {len(documentation)} characters; the protocol caps it at {cls._DOCUMENTATION_MAX}"
             raise ValueError(msg)
 
