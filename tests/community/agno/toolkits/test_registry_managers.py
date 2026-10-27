@@ -20,8 +20,11 @@ from digitalkin.community.agno.toolkits.registry.action import (
     UpdateAction,
 )
 from digitalkin.community.agno.toolkits.registry.services.action import (
+    AppendServiceAction,
     CreateServiceAction,
     LoadServiceAction,
+    PatchServiceAction,
+    RemoveServiceAction,
     StructureServiceAction,
     UpdateServiceAction,
 )
@@ -307,7 +310,7 @@ class TestCrudRoundTrip:
         setup_id = created["output"]["id"]
 
         updated = _env(
-            await svc.services_manager(UpdateServiceAction(setup_id=setup_id, name="renamed", content={"a": 2}))
+            await svc.services_manager(UpdateServiceAction(setup_id=setup_id, name="renamed", content={"a": 2}, structure={}))
         )
         assert updated["metadata"]["tool"] == "update"
         assert updated["output"]["name"] == "renamed"
@@ -326,7 +329,7 @@ class TestServiceContentIsFreeForm:
         ctx = SimpleNamespace(get_module_config_schema=AsyncMock(return_value={}), callbacks=SimpleNamespace())
         mgr = ServicesManager(*_stores(), context=ctx)  # type: ignore[arg-type]
         env = _env(
-            await mgr.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="x", content={"free": 1}))
+            await mgr.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="x", content={"free": 1}, structure={}))
         )
         assert env["metadata"]["success"] is True
         ctx.get_module_config_schema.assert_not_awaited()
@@ -648,7 +651,7 @@ class TestDeletedResourceIsFrozen:
         svc = ServicesManager(*_stores())
         assert _env(await svc.services_manager(DeleteAction(setup_id="setups:nikita")))["output"] is True
         env = _env(
-            await svc.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}))
+            await svc.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}, structure={}))
         )
         assert env["metadata"]["success"] is False
         assert env["metadata"]["tool"] == "update"
@@ -1196,22 +1199,23 @@ class TestAuthoredStructure:
             "b": "the b knob",
         }
 
-    async def test_update_without_a_map_leaves_the_new_revision_without_one(self) -> None:
-        """The map belongs to the content, so a revision carries only what its call supplied."""
-        svc = ServicesManager(*_stores())
-        created = _env(
-            await svc.services_manager(
-                CreateServiceAction(name="N", content={"a": "one"}, structure={"a": "the a knob"})
-            )
+    def test_update_requires_a_structure(self) -> None:
+        """Like create: an update rewrites the whole content, so it must describe it."""
+        with pytest.raises(ValidationError, match="structure"):
+            UpdateServiceAction(setup_id="setups:x", name="N", content={"a": "two"})  # type: ignore[call-arg]
+
+    async def test_a_raw_update_without_a_structure_fails_cleanly(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager({
+                "action": "update",
+                "setup_id": "setups:nikita",
+                "name": "N",
+                "content": {"a": "two"},
+            })
         )
 
-        updated = _env(
-            await svc.services_manager(
-                UpdateServiceAction(setup_id=created["output"]["id"], name="N", content={"a": "two"})
-            )
-        )
-
-        assert updated["output"]["current_setup_version"]["structure"] == {}
+        assert env["metadata"]["success"] is False
+        assert "structure" in env["error"]
 
     def test_create_requires_a_structure(self) -> None:
         with pytest.raises(ValidationError):
@@ -1670,6 +1674,526 @@ class TestDisplayLabels:
             StructureServiceAction,
             LoadServiceAction,
             UpdateServiceAction,
+        ):
+            assert cls.display_name
+            assert "_" not in cls.display_name
+
+
+class TestPatchAndAppend:
+    """``patch`` changes one existing element, ``append`` adds one; both cut a new version."""
+
+    _BASE_MAP: ClassVar[dict[str, str]] = {"llm.model": "which model answers", "tools": "what it may call"}
+
+    @classmethod
+    async def _service(cls) -> tuple[ServicesManager, str]:
+        """A services manager over one service with a key map and documentation."""
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(
+                    name="Brand",
+                    content={"llm": {"model": "small"}, "tools": ["search"]},
+                    documentation="the house voice",
+                    structure=cls._BASE_MAP,
+                )
+            )
+        )
+        return manager, created["output"]["id"]
+
+    @staticmethod
+    async def _current(manager: ServicesManager, setup_id: str) -> dict[str, Any]:
+        return _env(await manager.services_manager(GetAction(setup_id=setup_id)))["output"]["current_setup_version"]
+
+    @staticmethod
+    async def _version_count(manager: ServicesManager, setup_id: str) -> int:
+        return _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"]
+
+    async def test_patch_changes_one_key_and_keeps_the_rest(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="llm.model", value="large", structure={"llm.model": "which model answers"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"] == {"llm": {"model": "large"}, "tools": ["search"]}
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_patch_refuses_an_absent_path_and_cuts_nothing(self) -> None:
+        """Patch never creates, so a mistyped key cannot slip a stray entry into the service."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(setup_id=setup_id, path="llm.modle", value="x", structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "append" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_append_adds_a_new_key_and_its_entry(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id, path="llm.temperature", value=0.2, structure={"llm.temperature": "how creative"}
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["llm"] == {"model": "small", "temperature": 0.2}
+        assert current["structure"] == {**self._BASE_MAP, "llm.temperature": "how creative"}
+
+    async def test_append_pushes_onto_a_list_and_describes_the_new_item(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id, path="tools", value="fetch", structure={"tools[1]": "the page fetcher"}
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["tools"] == ["search", "fetch"]
+        assert current["structure"] == {**self._BASE_MAP, "tools[1]": "the page fetcher"}
+
+    async def test_append_refuses_an_existing_value_and_cuts_nothing(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="llm.model", value="x", structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "patch" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_a_patched_section_is_described_again(self) -> None:
+        """Replacing a section removes its keys, so their entries go and the call's own come in."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(
+                setup_id=setup_id,
+                path="llm",
+                value={"name": "large", "temperature": 0.2},
+                structure={"llm.name": "which model answers", "llm.temperature": "how creative"},
+            )
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {
+            "tools": "what it may call",
+            "llm.name": "which model answers",
+            "llm.temperature": "how creative",
+        }
+
+    async def test_an_empty_map_leaves_the_edited_element_undescribed(self) -> None:
+        """The call describes what it writes, as on create: an empty map means no entry for it."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(setup_id=setup_id, path="llm.model", value="large", structure={})
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {"tools": "what it may call"}
+
+    async def test_entries_outside_the_edited_element_are_kept(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(setup_id=setup_id, path="region", value="eu", structure={"region": "where it runs"})
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {**self._BASE_MAP, "region": "where it runs"}
+
+    async def test_an_entry_guessing_the_wrong_list_index_is_refused_and_names_the_real_one(self) -> None:
+        """A push lands at the end; an entry keyed elsewhere would describe another item."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(
+                    setup_id=setup_id, path="tools", value="fetch", structure={"tools[0]": "the page fetcher"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "tools[1]" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_entry_naming_a_missing_key_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="llm", value={"name": "large"}, structure={"llm.model": "stale"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "llm.model" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    @pytest.mark.parametrize("action_class", [PatchServiceAction, AppendServiceAction])
+    def test_a_structure_is_required(self, action_class: type[PatchServiceAction]) -> None:
+        """Like create: an action that can add or remove keys must say what it writes."""
+        with pytest.raises(ValidationError, match="structure"):
+            action_class(setup_id="setups:x", path="a", value=1)  # type: ignore[call-arg]
+
+    @pytest.mark.parametrize("action", ["patch", "append"])
+    async def test_a_raw_call_without_a_structure_fails_cleanly(self, action: str) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager({"action": action, "setup_id": setup_id, "path": "region", "value": "eu"})
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "structure" in env["error"]
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            PatchServiceAction(setup_id="", path="llm.model", value="large", structure={}),
+            AppendServiceAction(setup_id="", path="region", value="eu", structure={}),
+        ],
+    )
+    async def test_the_name_and_documentation_carry_over(self, action: PatchServiceAction) -> None:
+        """Unlike update, the configuration and its documentation never have to be resent."""
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(action.model_copy(update={"setup_id": setup_id})))
+
+        assert env["output"]["name"] == "Brand"
+        assert env["output"]["current_setup_version"]["documentation"] == "the house voice"
+
+    async def test_an_edit_can_start_from_an_older_version(self) -> None:
+        manager, setup_id = await self._service()
+        first = (await self._current(manager, setup_id))["id"]
+        await manager.services_manager(
+            UpdateServiceAction(
+                setup_id=setup_id, name="Brand", content={"llm": {"model": "BROKEN"}}, structure={"llm": "broken"}
+            )
+        )
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id,
+                setup_version_id=first,
+                path="region",
+                value="eu",
+                structure={"region": "where it runs"},
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {"model": "small"}, "tools": ["search"], "region": "eu"}
+        assert current["structure"] == {**self._BASE_MAP, "region": "where it runs"}
+        assert await self._version_count(manager, setup_id) == 3
+
+    async def test_a_version_of_another_setup_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+        other = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="Other", content={"llm": {"model": "x"}}, structure={})
+            )
+        )
+        foreign = other["output"]["current_setup_version"]["id"]
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, setup_version_id=foreign, path="llm.model", value="x", structure={}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "is not a version of" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_edit_can_be_staged_without_activating(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(setup_id=setup_id, path="llm.model", value="large", structure={}, set_as_current=False)
+        )
+
+        assert (await self._current(manager, setup_id))["content"]["llm"]["model"] == "small"
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager(
+                PatchServiceAction(setup_id="setups:duda", path="secret", value="x", structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in env["error"]
+
+    async def test_a_key_persistence_would_mangle_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="mood\U0001f525", value=1, structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_a_raw_flattened_call_dispatches(self) -> None:
+        """Exactly what the model sends: the action's fields as siblings of the discriminator."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                "patch", setup_id=setup_id, path="llm.model", value="large", structure={"llm.model": "the model"}
+            )
+        )
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"]["llm"]["model"] == "large"
+
+    async def test_a_null_value_is_written_not_dropped(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager({
+            "action": "patch",
+            "setup_id": setup_id,
+            "path": "llm.model",
+            "value": None,
+            "structure": {},
+        })
+
+        assert (await self._current(manager, setup_id))["content"]["llm"] == {"model": None}
+
+    def test_both_actions_are_writes(self) -> None:
+        """``writes`` drives the setup-cache invalidation; without it running jobs keep the old config."""
+        assert PatchServiceAction.writes is True
+        assert AppendServiceAction.writes is True
+
+    async def test_both_actions_are_services_only(self) -> None:
+        setup, registry = _stores()
+        for action in ("patch", "append"):
+            env = _env(
+                await KinsManager(setup, registry).kins_manager({
+                    "action": action,
+                    "setup_id": "setups:isaac",
+                    "path": "agent",
+                    "value": "y",
+                    "structure": {},
+                })
+            )
+            assert env["metadata"]["success"] is False
+
+
+class TestRemoveAction:
+    """``remove`` deletes one element and keeps the map describing what is left."""
+
+    _BASE_MAP: ClassVar[dict[str, str]] = {
+        "llm.model": "which model answers",
+        "tools[1]": "the fetcher",
+        "tools[2]": "the browser",
+    }
+
+    @classmethod
+    async def _service(cls) -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(
+                    name="Brand",
+                    content={"llm": {"model": "small"}, "tools": ["search", "fetch", "browse"]},
+                    documentation="the house voice",
+                    structure=cls._BASE_MAP,
+                )
+            )
+        )
+        return manager, created["output"]["id"]
+
+    @staticmethod
+    async def _current(manager: ServicesManager, setup_id: str) -> dict[str, Any]:
+        return _env(await manager.services_manager(GetAction(setup_id=setup_id)))["output"]["current_setup_version"]
+
+    @staticmethod
+    async def _version_count(manager: ServicesManager, setup_id: str) -> int:
+        return _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"]
+
+    async def test_removes_a_key_and_its_entry(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm.model")))
+
+        assert env["metadata"]["success"] is True
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {}, "tools": ["search", "fetch", "browse"]}
+        assert current["structure"] == {"tools[1]": "the fetcher", "tools[2]": "the browser"}
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_removing_a_list_item_renumbers_the_later_entries(self) -> None:
+        """The browser moved from tools[2] to tools[1]; its entry must follow it, not vanish or lie."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="tools[1]"))
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["tools"] == ["search", "browse"]
+        assert current["structure"] == {"llm.model": "which model answers", "tools[1]": "the browser"}
+
+    async def test_an_absent_path_is_refused_and_cuts_nothing(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm.modle")))
+
+        assert env["metadata"]["success"] is False
+        assert "not found" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_empty_path_fails_cleanly(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager({"action": "remove", "setup_id": setup_id, "path": ""}))
+
+        assert env["metadata"]["success"] is False
+        assert "path" in env["error"]
+
+    async def test_the_name_and_documentation_carry_over(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="tools[0]")))
+
+        assert env["output"]["name"] == "Brand"
+        assert env["output"]["current_setup_version"]["documentation"] == "the house voice"
+
+    async def test_a_removal_can_start_from_an_older_version(self) -> None:
+        manager, setup_id = await self._service()
+        first = (await self._current(manager, setup_id))["id"]
+        await manager.services_manager(
+            UpdateServiceAction(setup_id=setup_id, name="Brand", content={"llm": {"model": "BROKEN"}}, structure={})
+        )
+
+        await manager.services_manager(
+            RemoveServiceAction(setup_id=setup_id, setup_version_id=first, path="tools[0]")
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {"model": "small"}, "tools": ["fetch", "browse"]}
+        assert current["structure"] == {
+            "llm.model": "which model answers",
+            "tools[0]": "the fetcher",
+            "tools[1]": "the browser",
+        }
+
+    async def test_a_removal_can_be_staged_without_activating(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm", set_as_current=False))
+
+        assert "llm" in (await self._current(manager, setup_id))["content"]
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager(RemoveServiceAction(setup_id="setups:duda", path="secret"))
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in env["error"]
+
+    async def test_a_raw_flattened_call_dispatches(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager("remove", setup_id=setup_id, path="llm.model"))
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"]["llm"] == {}
+
+    def test_it_takes_no_value_and_no_map(self) -> None:
+        """Nothing is written, so there is nothing to describe: the map is updated from the removal."""
+        assert "value" not in RemoveServiceAction.model_fields
+        assert "structure" not in RemoveServiceAction.model_fields
+
+    def test_it_is_a_write(self) -> None:
+        assert RemoveServiceAction.writes is True
+
+    async def test_it_is_services_only(self) -> None:
+        env = _env(
+            await KinsManager(*_stores()).kins_manager({"action": "remove", "setup_id": "setups:isaac", "path": "agent"})
+        )
+
+        assert env["metadata"]["success"] is False
+
+
+class TestDisplayLabels:
+    """Managers label themselves and resolve the called action's label per call."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            {"action": {"action": "create", "name": "x"}},
+            {"action": '{"action": "create", "name": "x"}'},
+            {"action": "create", "name": "x"},
+        ],
+    )
+    def test_manager_labels(self, args: dict[str, Any]) -> None:
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", "Create")
+
+    @pytest.mark.parametrize(
+        "args",
+        [None, {}, {"action": "not json"}, {"action": "{broken"}, {"action": {"action": "nope!"}}, {"action": 3}],
+    )
+    def test_manager_labels_fallback(self, args: dict[str, Any] | None) -> None:
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", None)
+
+    def test_unknown_identifier_action_is_humanized(self) -> None:
+        labels = ServicesManager(*_stores()).display_labels("services_manager", {"action": {"action": "do_thing"}})
+        assert labels == ("Services Manager", "Do thing")
+
+    def test_each_manager_has_its_label(self) -> None:
+        setup, reg = _stores()
+        args = {"action": {"action": "change_visibility"}}
+        assert ToolsManager(setup, reg).display_labels("tools_manager", args) == ("Tools Manager", "Change visibility")
+        assert KinsManager(setup, reg).display_labels("kins_manager", args) == ("Kins Manager", "Change visibility")
+
+    def test_inherited_action_keeps_its_label(self) -> None:
+        args = {"action": {"action": "update"}}
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", "Update")
+
+    def test_manager_llm_schema_has_no_display_name(self) -> None:
+        fn = ServicesManager(*_stores()).async_functions["services_manager"]
+        dumped = json.dumps(fn.to_dict(), ensure_ascii=False)
+        assert "display_name" not in dumped
+
+    def test_every_action_declares_a_label(self) -> None:
+        for cls in (
+            GetAction,
+            SearchAction,
+            UpdateAction,
+            DeleteAction,
+            ChangeVisibilityAction,
+            ListVersionsAction,
+            SetVersionAction,
+            CreateServiceAction,
+            StructureServiceAction,
+            LoadServiceAction,
+            UpdateServiceAction,
+            PatchServiceAction,
+            AppendServiceAction,
+            RemoveServiceAction,
         ):
             assert cls.display_name
             assert "_" not in cls.display_name
