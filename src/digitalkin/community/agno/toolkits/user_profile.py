@@ -36,6 +36,7 @@ class UserProfileTools(DkToolkit):
             name="user_profile_tools",
             tools=[self.get_user_profile],
             context=context,
+            display_name="User profile",
         )
 
     async def get_user_profile(self) -> str:

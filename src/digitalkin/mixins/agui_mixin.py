@@ -11,6 +11,7 @@ the front as ``STATE_SNAPSHOT`` + ``STATE_DELTA``. See ``docs/agui_events.md``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -44,6 +45,7 @@ from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
     CustomEvent,
+    MissionTitle,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -87,9 +89,13 @@ from digitalkin.models.module.ag_ui import (
     AgUiToolCallResultOutput,
     AgUiToolCallStartOutput,
 )
+from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import MissionRecord
 from digitalkin.models.settings.agui import get_agui_settings
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from digitalkin.models.module.ag_ui import AgUiEventOutput
     from digitalkin.models.module.module_context import ModuleContext
 
@@ -110,6 +116,7 @@ class AgUiRunState:
         self.open = True
         self.sources_id = str(uuid.uuid4())
         self.sources: dict[str | None, dict[str, dict[str, str]]] = {}
+        self.title_task: asyncio.Task[None] | None = None
         self.state: dict[str, Any] = {
             "run": {"status": "running", "error": None, "heartbeatAt": None},
             "tools": {},
@@ -149,6 +156,55 @@ class AgUiRunState:
             AgUiOutput(root=AgUiStateDeltaOutput(event=StateDeltaEvent.model_validate({"delta": ops})))
         )
 
+    async def title(
+        self,
+        context: ModuleContext,
+        mission_title: Callable[[ModuleContext], Awaitable[str | None]],
+    ) -> None:
+        """Title the mission once: emit a ``mission_title`` custom event and record it.
+
+        A mission that has a title, or has used all its attempts, is left alone. An empty hook
+        result counts as one attempt; the attempt that reaches ``mission_title_attempts`` emits a
+        null title so the back knows none will come. Runs as ``title_task`` alongside the run; a
+        failure is logged, counts nothing and never fails the run.
+
+        Args:
+            context: Module context whose callbacks carry the event.
+            mission_title: The mixin's ``mission_title`` hook.
+        """
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
+            record = await context.storage.read("mission", "mission")
+            mission = record.data if record is not None and isinstance(record.data, MissionRecord) else MissionRecord()
+            max_attempts = get_agui_settings().mission_title_attempts
+            if mission.title or mission.title_attempts >= max_attempts:
+                return
+            title = await mission_title(context)
+            attempts = mission.title_attempts + 1
+            if not title:
+                if attempts < max_attempts:
+                    await context.storage.upsert("mission", "mission", {"title": None, "title_attempts": attempts})
+                    return
+                logger.info(
+                    "Mission title still empty after %d attempts, emitting a null title",
+                    attempts,
+                    extra=context.session.current_ids(),
+                )
+                title = None
+            if not self.open:
+                return
+            await context.callbacks.send_message(
+                AgUiOutput(
+                    root=AgUiCustomEventOutput(
+                        event=AgUiCustomEvent(
+                            name="mission_title", value=MissionTitle(title=title).model_dump(mode="json")
+                        )
+                    )
+                )
+            )
+            await context.storage.upsert("mission", "mission", {"title": title, "title_attempts": attempts})
+        except Exception:
+            logger.exception("Mission title failed", extra=context.session.current_ids())
+
     async def fail(
         self,
         context: ModuleContext,
@@ -176,6 +232,8 @@ class AgUiRunState:
                 extra=context.session.current_ids(),
             )
             return
+        if self.title_task is not None:
+            self.title_task.cancel()
         self.open = False
         await self.update(context, (("run", "status"), status), (("run", "error"), message))
         await context.callbacks.send_message(
@@ -305,6 +363,27 @@ class AgUiMixin:
         if handler is not None:
             await handler(self, context, event)
 
+    async def mission_title(  # ruff: ignore[no-self-use]
+        self,
+        context: ModuleContext,  # ruff: ignore[unused-method-argument]
+    ) -> str | None:
+        """Title to propose for the mission, emitted once as a ``mission_title`` custom event.
+
+        Override it in the trigger to name the mission; without an override no title task runs.
+        Called as a background task on each ``RUN_STARTED`` until the mission has a title, so it
+        runs alongside the agent; ``RUN_FINISHED`` waits for it and ``RUN_ERROR`` cancels it.
+        Return None while the conversation does not say enough: after ``mission_title_attempts``
+        such runs the SDK emits a null title and stops asking.
+
+        Args:
+            context: Module context of the run being started.
+
+        Returns:
+            The title to emit, already cleaned, or None (or an empty string) when there is not
+            enough context yet.
+        """
+        return None
+
     _agui_dispatch: ClassVar[dict[str, Any]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -381,7 +460,7 @@ class AgUiMixin:
         context: ModuleContext,
         event: RunStartedEvent,
     ) -> None:
-        """Handle run started event - emit AG-UI RunStarted."""
+        """Handle run started event - emit AG-UI RunStarted and the state snapshot, then start the title task."""
         if not self._run_id:
             self._run_id = event.run_id or str(uuid.uuid4())
         if not self._thread_id:
@@ -408,6 +487,8 @@ class AgUiMixin:
         await self._send_agui(context, output)
         context.agui_run = AgUiRunState()
         await context.agui_run.snapshot(context)
+        if type(self).mission_title is not AgUiMixin.mission_title:
+            context.agui_run.title_task = asyncio.create_task(context.agui_run.title(context, self.mission_title))
 
     async def _handle_text_message_started(
         self,
@@ -486,6 +567,8 @@ class AgUiMixin:
         )
         run = context.agui_run
         if run is not None and run.open:
+            if run.title_task is not None:
+                await run.title_task
             run.open = False
             await run.update(context, (("run", "status"), "completed"))
         output = AgUiRunFinishedOutput(
@@ -610,10 +693,20 @@ class AgUiMixin:
             self._unidentified(context, event)
             return
 
+        # ag_ui extras keep their key as-is (no alias generation); optional fields stay absent.
+        labels: dict[str, Any] = {
+            key: label
+            for key, label in (
+                ("toolDisplayName", tool.tool_display_name),
+                ("functionDisplayName", tool.function_display_name),
+            )
+            if label is not None
+        }
         start_output = AgUiToolCallStartOutput(
             event=AgUiToolCallStartEvent(
                 tool_call_id=tool_call_id,
                 tool_call_name=tool.tool_name,
+                **labels,
                 **self._authored(event),
             )
         )
@@ -637,6 +730,8 @@ class AgUiMixin:
                     ("tools", tool_call_id),
                     {
                         "name": tool.tool_name,
+                        "toolDisplayName": tool.tool_display_name,
+                        "functionDisplayName": tool.function_display_name,
                         "status": "running",
                         "subagentRunId": event.subagent_run_id,
                         "startedAt": AgUiRunState.now_ms(),

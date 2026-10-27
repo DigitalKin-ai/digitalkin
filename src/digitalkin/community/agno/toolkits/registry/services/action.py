@@ -40,6 +40,7 @@ class CreateServiceAction(RegistryAction):
     requires a separate ``change_visibility`` call.
     """
 
+    display_name = "Create"
     action: Literal["create"] = "create"
     writes: ClassVar[bool] = True
     name: str = Field(..., description="Human-readable service name.")
@@ -87,6 +88,7 @@ class StructureServiceAction(RegistryAction):
     it to ``load`` to read just that part of the configuration.
     """
 
+    display_name = "Structure"
     action: Literal["structure"] = "structure"
     setup_id: str = Field(..., description="The service setup id whose shape to show.")
 
@@ -108,6 +110,7 @@ class StructureServiceAction(RegistryAction):
 class LoadServiceAction(RegistryAction):
     """Load a service's configuration — one key from its structure, or the whole document."""
 
+    display_name = "Load"
     action: Literal["load"] = "load"
     setup_id: str = Field(..., description="The service setup id to load (from a search result).")
     key: str | None = Field(

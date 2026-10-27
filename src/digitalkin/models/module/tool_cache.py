@@ -30,10 +30,12 @@ class ToolDefinition(BaseModel):
         name: Tool name (from protocol const or trigger class name).
         description: Tool description (from trigger docstring).
         parameters_schema: JSON Schema object describing the tool's parameters.
+        display_name: Human label of the function (trigger ``display_name``), if declared.
     """
 
     name: str
     description: str
+    display_name: str | None = None
     parameters_schema: dict[str, Any] = Field(
         default_factory=lambda: {"type": "object", "properties": {}, "required": []}
     )
@@ -179,6 +181,7 @@ class ToolModuleInfo(ModuleInfo):
                 ToolDefinition(
                     name=protocol_prop.get("const", def_name),
                     description=def_schema.get("description", ""),
+                    display_name=def_schema.get("display_name"),
                     parameters_schema=ToolModuleInfo._build_parameters_from_schema(inlined),
                 )
             )

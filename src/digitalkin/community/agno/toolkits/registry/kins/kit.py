@@ -42,6 +42,7 @@ class KinsManager(RegistryObjectToolKit):
                 "update. The action discriminator selects the operation."
             ),
             entrypoint=self.kins_manager,
+            display_name="Kins Manager",
         )
 
     async def kins_manager(self, action: KinActions | None = None, **fields: Any) -> str:

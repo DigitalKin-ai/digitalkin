@@ -42,6 +42,7 @@ def _ctx() -> MagicMock:
     ctx = MagicMock()
     ctx.callbacks.send_message = AsyncMock()
     ctx.session.current_ids = MagicMock(return_value={})
+    ctx.storage.read = AsyncMock(return_value=None)
     ctx.agui_run = None
     return ctx
 
@@ -138,6 +139,32 @@ class TestMixinPipelineState:
         assert added[0]["value"]["status"] == "running"
         assert added[0]["value"]["name"] == "search"
         assert completed == [{"op": "replace", "path": "/tools/call_1/status", "value": "completed"}]
+
+    async def test_run_state_tool_entry_has_display_names(self) -> None:
+        ctx, mixin = _ctx(), AgUiMixin()
+        await _started(mixin, ctx)
+        tool = ToolInfo(
+            tool_call_id="c1", tool_name="services_manager", tool_display_name="Services", function_display_name="Create"
+        )
+
+        await mixin._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool, timestamp=None, metadata=None)
+        )
+
+        expected = {"name": "services_manager", "toolDisplayName": "Services", "functionDisplayName": "Create"}
+        assert expected.items() <= ctx.agui_run.state["tools"]["c1"].items()
+        assert expected.items() <= _deltas(ctx)[0][0]["value"].items()
+
+    async def test_run_state_tool_entry_without_labels_is_null(self) -> None:
+        ctx, mixin = _ctx(), AgUiMixin()
+        await _started(mixin, ctx)
+
+        await mixin._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=_tool(), timestamp=None, metadata=None)
+        )
+
+        entry = ctx.agui_run.state["tools"]["call_1"]
+        assert (entry["toolDisplayName"], entry["functionDisplayName"]) == (None, None)
 
     async def test_tool_error_emits_error_result_and_failed_status(self) -> None:
         ctx, mixin = _ctx(), AgUiMixin()

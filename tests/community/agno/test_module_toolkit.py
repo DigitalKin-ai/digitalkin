@@ -26,6 +26,8 @@ from agno.tools.function import ToolResult
 
 from digitalkin.community.agno.module_toolkit import ModuleToolkit
 from digitalkin.models.module.ag_ui import AgUiOutput
+from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.services.communication.exceptions import ToolCallError
 
 
@@ -456,3 +458,50 @@ class TestRelaySources:
         await ModuleToolkit._relay_custom_event(agent, frame)  # type: ignore[arg-type]
 
         assert list(agent.agui_run.sources[None]) == ["https://ok.io/"]
+
+
+class TestDisplayLabels:
+    """The toolkit labels itself with the setup name and its functions from the schema."""
+
+    @staticmethod
+    def _labelled_toolkit() -> ModuleToolkit:
+        info = ToolModuleInfo(
+            module_id="rag-1",
+            module_type=RegistryModuleType.TOOL_MODULE,
+            address="localhost",
+            port=50051,
+            version="1.0.0",
+            module_name="ToolRagMethods",
+            setup_id="setup-rag",
+            tool_name="Document search",
+            tools=[
+                ToolDefinition(name="search", description="Search", display_name="Search documents"),
+                ToolDefinition(name="list_files", description="List"),
+            ],
+        )
+
+        async def _fn(**_kwargs: object) -> AsyncGenerator[dict, None]:
+            yield {}
+
+        context = MagicMock(session=MagicMock(job_id="job_1"))
+        context.create_tool_functions.return_value = [(tool, _fn) for tool in info.tools]
+        return ModuleToolkit(context, info)
+
+    def test_declared_function_label(self) -> None:
+        toolkit = self._labelled_toolkit()
+        slug = toolkit._tool_module_info.slug
+
+        assert toolkit.display_labels(f"{slug}__search", {}) == ("Document search", "Search documents")
+
+    def test_undeclared_function_label_is_humanized(self) -> None:
+        toolkit = self._labelled_toolkit()
+        slug = toolkit._tool_module_info.slug
+
+        assert toolkit.display_labels(f"{slug}__list_files", {}) == ("Document search", "List files")
+
+    def test_title_never_reaches_the_llm(self) -> None:
+        toolkit = self._labelled_toolkit()
+
+        for function in toolkit.functions.values():
+            assert "title" not in function.to_dict()
+            assert "Search documents" not in json.dumps(function.to_dict())

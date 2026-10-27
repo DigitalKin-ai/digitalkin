@@ -2,10 +2,15 @@
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any, Literal
 from unittest.mock import AsyncMock
 
+import pytest
+from agno.tools.function import Function
+from pydantic import BaseModel, Field
+
 from digitalkin.community.agno.toolkits import DkToolkit
+from digitalkin.models.events import ToolInfo
 
 
 def test_ok_envelope() -> None:
@@ -113,3 +118,76 @@ async def test_cite_is_best_effort_when_the_run_fails() -> None:
     ctx = SimpleNamespace(callbacks=SimpleNamespace(), agui_run=run)
     await _Kit(ctx)._cite("https://a.io/")
     run.cite.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("rag_search", "Rag search"), ("rag__search", "Search"), ("ask_form", "Ask form"), ("Search", "Search"), ("", "")],
+)
+def test_humanize(raw: str, expected: str) -> None:
+    assert ToolInfo.humanize(raw) == expected
+
+
+class _LabelledKit(DkToolkit):
+    def __init__(self, name: str, display_name: str | None = None) -> None:
+        async def _noop() -> str:
+            return ""
+
+        super().__init__(
+            name=name,
+            tools=[
+                Function(name="read", title="Read message", entrypoint=_noop, skip_entrypoint_processing=True),
+                Function(name="outline", entrypoint=_noop, skip_entrypoint_processing=True),
+            ],
+            display_name=display_name,
+        )
+
+
+def test_display_labels_uses_function_title() -> None:
+    assert _LabelledKit(name="x", display_name="History").display_labels("read", None) == ("History", "Read message")
+
+
+def test_display_labels_without_title_is_humanized() -> None:
+    assert _LabelledKit(name="x", display_name="History").display_labels("outline", None) == ("History", "Outline")
+
+
+class _SingleKit(DkToolkit):
+    def __init__(self) -> None:
+        async def _noop() -> str:
+            return ""
+
+        super().__init__(
+            name="single", tools=[Function(name="only", entrypoint=_noop, skip_entrypoint_processing=True)]
+        )
+
+
+def test_single_function_without_title_has_no_function_label() -> None:
+    assert _SingleKit().display_labels("only", None) == ("Single", None)
+
+
+def test_display_labels_unknown_function() -> None:
+    assert _LabelledKit(name="x", display_name="History").display_labels("nope", {}) == ("History", None)
+
+
+def test_display_name_defaults_to_humanized_name() -> None:
+    assert _LabelledKit(name="chat_history_tools").display_name == "Chat history tools"
+
+
+class _CreateAction(BaseModel):
+    action: Literal["create"] = "create"
+
+
+class _DeleteAction(BaseModel):
+    action: Literal["delete"] = "delete"
+
+
+@pytest.mark.parametrize(
+    ("actions", "members"),
+    [
+        (_CreateAction, (_CreateAction,)),
+        (Annotated[_CreateAction, Field(discriminator="action")], (_CreateAction,)),
+        (Annotated[_CreateAction | _DeleteAction, Field(discriminator="action")], (_CreateAction, _DeleteAction)),
+    ],
+)
+def test_action_members_unwraps_the_discriminated_union(actions: Any, members: tuple[type, ...]) -> None:
+    assert DkToolkit.action_members(actions) == members

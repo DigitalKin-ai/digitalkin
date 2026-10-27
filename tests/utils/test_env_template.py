@@ -71,7 +71,44 @@ class TestRender:
         rows = EnvTemplate._entries(Probe, minimum=False)
 
         assert rows == [("PROBE_TOKEN", "sk-xxxx", "", False)]
-        assert Probe().token.get_secret_value() == ""
+        assert not Probe().token.get_secret_value()
+
+    @pytest.mark.parametrize(
+        ("value", "rendered"),
+        [
+            ("plain", "plain"),
+            ("redis://localhost:6379/0", "redis://localhost:6379/0"),
+            ("Untitled mission", "'Untitled mission'"),
+            ("a#b", "'a#b'"),
+            ("$HOME", "'$HOME'"),
+            ('say "hi"', "'say \"hi\"'"),
+            ("it's", '"it\'s"'),
+            ('it\'s "a\\b"', '"it\'s \\"a\\\\b\\""'),
+        ],
+    )
+    def test_values_env_files_would_misread_are_quoted(self, value: str, rendered: str) -> None:
+        """Spaces, ``#``, ``$`` and quotes need quoting; single quotes unless the value holds one."""
+        assert EnvTemplate._render_value(value) == rendered
+
+    def test_env_example_is_quoted_too(self) -> None:
+        from pydantic import Field
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Probe(BaseSettings):
+            model_config = SettingsConfigDict(env_prefix="PROBE_")
+            label: str = Field(default="", json_schema_extra={"env_example": "My label"})
+
+        assert EnvTemplate._entries(Probe, minimum=False) == [("PROBE_LABEL", "'My label'", "", False)]
+
+    def test_quoted_default_is_rendered_in_the_template(self) -> None:
+        from pydantic import Field
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Probe(BaseSettings):
+            model_config = SettingsConfigDict(env_prefix="PROBE_")
+            label: str = Field(default="Untitled mission", description="A label.")
+
+        assert EnvTemplate._entries(Probe, minimum=False) == [("PROBE_LABEL", "'Untitled mission'", "A label.", False)]
 
     def test_nested_credentials_are_commented_out(self) -> None:
         rendered = EnvTemplate.render([PACKAGE])

@@ -14,7 +14,7 @@ import os
 import pathlib
 import types
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.protobuf import json_format, struct_pb2
@@ -45,6 +45,7 @@ class _Wire:
         self.events: list[dict[str, Any]] = []
         self.callbacks = types.SimpleNamespace(send_message=self.send_message, logger=MagicMock())
         self.session = types.SimpleNamespace(current_ids=dict)
+        self.storage = types.SimpleNamespace(read=AsyncMock(return_value=None))
         self.agui_run: Any = None
 
     async def send_message(self, output: Any) -> None:
@@ -369,12 +370,18 @@ class TestStreamInvariants:
 class TestToolCallTracking:
     async def test_external_tool_started_before_pause_is_closed_once_not_reopened(self) -> None:
         """If agno streams an external tool's start before pausing, the pause closes it, never re-opens it."""
-        external = _make_tool_execution(tool_call_id="ext1", tool_name="ask_user", tool_args={}, external_execution_required=True)
+        external = _make_tool_execution(
+            tool_call_id="ext1", tool_name="ask_user", tool_args={}, external_execution_required=True
+        )
         events = await _stream(
             "hitl_external_started",
             [
                 _start(),
-                _make_event(_FakeRunEvent.tool_call_started, run_id="r1", tool=_make_tool(tool_call_id="ext1", tool_name="ask_user")),
+                _make_event(
+                    _FakeRunEvent.tool_call_started,
+                    run_id="r1",
+                    tool=_make_tool(tool_call_id="ext1", tool_name="ask_user"),
+                ),
                 _make_event(_FakeTeamRunEvent.run_paused, run_id="r1", tools=[external], requirements=[]),
             ],
             pause_ids=["ext1"],
@@ -390,11 +397,15 @@ class TestToolCallTracking:
         adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, run_id="r1", tool=done))
         adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_completed, run_id="r1", tool=done))
         adapter.to_digitalkin_events(
-            _make_event(_FakeRunEvent.tool_call_started, run_id="r1", tool=_make_tool(tool_call_id="c-parent", tool_name="t"))
+            _make_event(
+                _FakeRunEvent.tool_call_started, run_id="r1", tool=_make_tool(tool_call_id="c-parent", tool_name="t")
+            )
         )
         adapter.to_digitalkin_events(_member("m1"))
         adapter.to_digitalkin_events(
-            _make_event(_FakeRunEvent.tool_call_started, run_id="m1", tool=_make_tool(tool_call_id="c-member", tool_name="t"))
+            _make_event(
+                _FakeRunEvent.tool_call_started, run_id="m1", tool=_make_tool(tool_call_id="c-member", tool_name="t")
+            )
         )
 
         closed = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_completed, run_id="m1", parent_run_id="r1"))
