@@ -75,6 +75,22 @@ class MyInput(DataModel[SearchIn | ChatIn]):
 
 `DataTrigger` carries `protocol` and `created_at`. `DataModel` carries `root` and `annotations: dict[str, str]`.
 
+### Function labels
+
+Each trigger of a tool module declares the label users see when an agent calls it, in English:
+
+```python
+class SearchIn(DataTrigger):
+    display_name = "Search documents"
+    protocol: Literal["search"] = "search"
+    query: str
+```
+
+- Mandatory on `ToolModule`: defining a tool module whose `input_format` has a trigger without `display_name` raises `TypeError` naming the protocol. SDK utility protocols (`healthcheck_*`) are exempt; `ArchetypeModule` is not checked.
+- `display_name` is a class variable: it is published on the trigger's schema definition, never in `properties`, so the LLM never sees it.
+- The tool's own label is its registry setup name. The front receives both as `toolDisplayName` / `functionDisplayName` (see [agui_events.md](agui_events.md#tool-calls)).
+- Upgrading a tool repo to this SDK version: add `display_name` to every trigger of its input union, or the module fails at import.
+
 Emit outputs with the context callback, as many times as needed:
 
 ```python
@@ -154,6 +170,7 @@ In remote mode this calls `UserProfileService.GetSetupSecret` for the current se
 
 Remote strategies get `client_config` from `CLIENT_CHANNEL_*` unless `services_config_params` provides one.
 `secret` reuses the `user_profile` params when it has none.
+`storage` always registers the SDK-owned `mission` collection (`MissionRecord`); a module's own `mission` entry wins.
 
 ```python
 from digitalkin.services.services_models import ServicesStrategy
@@ -268,6 +285,7 @@ class ChatTrigger(TriggerHandler):
 ```
 
 `handle_agui_input` resumes a paused run when the input carries the tool result, otherwise starts a fresh run.
+To name the mission, override `mission_title(self, context) -> str | None` on the trigger: return None while the conversation says too little, the SDK retries on the next run and emits a null title once the attempts run out ([agui_custom_events.md#mission-title](agui_custom_events.md#mission-title)). No storage declaration is needed.
 `PausedRunStore` needs a storage collection: add `HITL_STORAGE_CONFIG` to `services_config_params["storage"]["config"]`.
 
 ### Memory
@@ -314,6 +332,7 @@ Working examples: `examples/redis_demo/`, `examples/bench_module/`, `examples/mo
 | Missing `initialize` | It is abstract; the class cannot be instantiated. |
 | `input_format = MyInput` (the `DataModel`) on a handler | Set the `DataTrigger` class; dispatch uses `isinstance` on `root`. |
 | Trigger file not named `*_trigger.py` | Discovery skips it; the protocol has no handler. |
+| `TypeError: <Module>: trigger(s) without display_name: …` | Add `display_name = "…"` to each listed trigger of the tool's input union. |
 | No `storage`/`cost` `config` in `services_config_params` | Strategy construction fails with a missing `config` argument. |
 | `{"hidden": True}` on a setup field | The filter reads `{"ui:widget": "hidden"}`. |
 | `-d local` | The flag's choices are `LOCAL` / `REMOTE`; use `SERVICE_MODE=local` or `-d LOCAL`. |

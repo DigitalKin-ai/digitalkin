@@ -49,9 +49,22 @@ class LoadManager(DkToolkit):
             tools=[self.load_manager],
             context=context,
             external_execution_required_tools=[self.load_manager.__name__],
+            display_name="Load Manager",
         )
         # The live list the agent's tools factory splats; bound by DefaultToolkits.build.
         self._base_tools: list[Any] | None = None
+
+    def display_labels(self, function_name: str, tool_args: dict[str, Any] | str | None) -> tuple[str, str | None]:  # ruff: ignore[unused-method-argument]
+        """Label the loader and the load action this call selects.
+
+        Args:
+            function_name: Technical name of the called function (``load_manager``).
+            tool_args: Call arguments carrying the ``action`` discriminator.
+
+        Returns:
+            ``(loader label, action label)``.
+        """
+        return self.display_name, self.action_label(tool_args, LoadActions)
 
     @property
     def tool_name(self) -> str:

@@ -56,3 +56,8 @@ async def test_service_error_retried_on_next_call() -> None:
     assert json.loads(await tools.get_user_profile())["error"] == "user profile is not available"
     assert json.loads(await tools.get_user_profile())["output"] == {"name": "Ada"}
     assert strategy.calls == 2
+
+
+def test_display_labels_single_function_has_no_function_label() -> None:
+    tools = UserProfileTools(DefaultUserProfile("missions:m1", "", ""))
+    assert tools.display_labels("get_user_profile", {}) == ("User profile", None)

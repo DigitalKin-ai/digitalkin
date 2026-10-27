@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
 from ag_ui.core.events import ActivitySnapshotEvent
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
@@ -20,7 +20,7 @@ from agno.tools import Toolkit
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.models.events import SourceCitation
+from digitalkin.models.events import SourceCitation, ToolInfo
 from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ class DkToolkit(Toolkit):
         tools: list[Any],
         context: ModuleContext | None = None,
         external_execution_required_tools: list[str] | None = None,
+        display_name: str | None = None,
     ) -> None:
         """Initialize the toolkit.
 
@@ -51,13 +52,63 @@ class DkToolkit(Toolkit):
             context: Module context; when present, :meth:`_notify` can emit AG-UI events.
             external_execution_required_tools: Tool names Agno must pause on (executed
                 outside the agent loop) instead of running their entrypoint.
+            display_name: Human label of the toolkit shown to users; defaults to the humanized ``name``.
         """
         self._ctx = context
+        self.display_name = display_name or ToolInfo.humanize(name)
         super().__init__(
             name=name,
             tools=tools,
             external_execution_required_tools=external_execution_required_tools or [],
         )
+
+    def display_labels(self, function_name: str, tool_args: dict[str, Any] | str | None) -> tuple[str, str | None]:  # ruff: ignore[unused-method-argument]
+        """Resolve the human labels of one call to this toolkit.
+
+        Args:
+            function_name: Technical name of the called function.
+            tool_args: Call arguments; used by toolkits whose label depends on them.
+
+        Returns:
+            ``(tool label, function label)``. The function label is the function's ``title``, else its
+            humanized name when the toolkit has several functions, else ``None``.
+        """
+        function = self.functions.get(function_name) or self.async_functions.get(function_name)
+        if function is None:
+            return self.display_name, None
+        if function.title is not None:
+            return self.display_name, function.title
+        several = len(self.functions.keys() | self.async_functions.keys()) > 1
+        return self.display_name, ToolInfo.humanize(function_name) if several else None
+
+    @staticmethod
+    def action_label(tool_args: dict[str, Any] | str | None, actions: Any) -> str | None:
+        """Label of the action a manager call selects through its ``action`` discriminator.
+
+        The action arrives as a dict, a JSON string of that dict, or a bare discriminator when the
+        model flattened the call. Only a clean identifier is ever labelled, never a raw payload.
+
+        Args:
+            tool_args: Call arguments of a manager tool.
+            actions: The manager's action class, or the ``Annotated`` discriminated union of them.
+
+        Returns:
+            The matching action's ``display_name``, the humanized discriminator for an unknown or
+            unlabelled action, or ``None`` when no discriminator resolves.
+        """
+        action = tool_args.get("action") if isinstance(tool_args, dict) else None
+        if isinstance(action, str) and action.lstrip().startswith("{"):
+            try:
+                action = json.loads(action)
+            except ValueError:
+                action = None
+        if isinstance(action, dict):
+            action = action.get("action")
+        if not isinstance(action, str) or not action.isidentifier():
+            return None
+        members = get_args(get_args(actions)[0]) if get_origin(actions) is Annotated else (actions,)
+        label = next((cls.display_name for cls in members if cls.model_fields["action"].default == action), None)
+        return label or ToolInfo.humanize(action)
 
     @staticmethod
     def _ok(output: Any, **metadata: Any) -> str:

@@ -64,6 +64,7 @@ def _make_context() -> MagicMock:
     ctx.callbacks.logger = MagicMock()
     ctx.session = MagicMock()
     ctx.session.current_ids = MagicMock(return_value={})
+    ctx.storage.read = AsyncMock(return_value=None)
     ctx.agui_run = None
     return ctx
 
@@ -383,6 +384,36 @@ class TestAgUi10ProducerConformance:
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
         assert wire["protocolVersion"] == PROTOCOL_VERSION == "1.0"
 
+    async def test_tool_call_start_carries_display_names_at_root(self) -> None:
+        """TOOL_CALL_START keeps toolCallName technical and adds both labels at the event root."""
+        ctx = _make_context()
+        tool = ToolInfo(
+            tool_call_id="c1", tool_name="services_manager", tool_display_name="Services", function_display_name="Create"
+        )
+        await AgUiMixin()._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool)
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["type"] == "TOOL_CALL_START"
+        assert (wire["toolCallName"], wire["toolDisplayName"], wire["functionDisplayName"]) == (
+            "services_manager",
+            "Services",
+            "Create",
+        )
+
+    async def test_tool_call_start_without_function_label_omits_it(self) -> None:
+        """A single-function tool sends its tool label; the absent function label is not on the wire."""
+        ctx = _make_context()
+        tool = ToolInfo(tool_call_id="c1", tool_name="ask_form", tool_display_name="Ask form")
+        await AgUiMixin()._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool)
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert (wire["toolCallName"], wire["toolDisplayName"]) == ("ask_form", "Ask form")
+        assert "functionDisplayName" not in wire
+
     @pytest.mark.parametrize(
         "event",
         [
@@ -425,14 +456,18 @@ class TestAgUi10ProducerConformance:
 
 
 class TestSubagentOutcome:
-    @pytest.mark.parametrize(("outcome", "wire", "status"), [("suspended", {"type": "suspended"}, "suspended"), (None, None, "completed")])
+    @pytest.mark.parametrize(
+        ("outcome", "wire", "status"), [("suspended", {"type": "suspended"}, "suspended"), (None, None, "completed")]
+    )
     async def test_outcome_reaches_wire_and_state(self, outcome: Any, wire: Any, status: str) -> None:
         from digitalkin.mixins.agui_mixin import AgUiRunState
 
         ctx = _make_context()
         ctx.agui_run = AgUiRunState()
         host = _Host()
-        await host.send_message(ctx, SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a", subagent_run_id="m1"))
+        await host.send_message(
+            ctx, SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a", subagent_run_id="m1")
+        )
         await host.send_message(
             ctx, SubagentFinishedEvent(event=AgentRunEvent.SUBAGENT_FINISHED, subagent_run_id="m1", outcome=outcome)
         )
@@ -453,7 +488,9 @@ class TestSourceCitationRouting:
 
         ctx = _make_context()
         ctx.agui_run = AgUiRunState()
-        await _Host().send_message(ctx, SourceCitationEvent(value=SourceCitation(url="https://a.io/"), subagent_run_id="m1"))
+        await _Host().send_message(
+            ctx, SourceCitationEvent(value=SourceCitation(url="https://a.io/"), subagent_run_id="m1")
+        )
 
         assert ctx.agui_run.sources == {"m1": {"https://a.io/": {"url": "https://a.io/"}}}
 

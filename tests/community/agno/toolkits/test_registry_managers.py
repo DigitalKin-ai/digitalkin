@@ -1602,3 +1602,61 @@ class TestConfigurationIsNotRewritten:
         env = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
 
         assert env["output"]["visibility"] == "internal"
+
+
+class TestDisplayLabels:
+    """Managers label themselves and resolve the called action's label per call."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            {"action": {"action": "create", "name": "x"}},
+            {"action": '{"action": "create", "name": "x"}'},
+            {"action": "create", "name": "x"},
+        ],
+    )
+    def test_manager_labels(self, args: dict[str, Any]) -> None:
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", "Create")
+
+    @pytest.mark.parametrize(
+        "args",
+        [None, {}, {"action": "not json"}, {"action": "{broken"}, {"action": {"action": "nope!"}}, {"action": 3}],
+    )
+    def test_manager_labels_fallback(self, args: dict[str, Any] | None) -> None:
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", None)
+
+    def test_unknown_identifier_action_is_humanized(self) -> None:
+        labels = ServicesManager(*_stores()).display_labels("services_manager", {"action": {"action": "do_thing"}})
+        assert labels == ("Services Manager", "Do thing")
+
+    def test_each_manager_has_its_label(self) -> None:
+        setup, reg = _stores()
+        args = {"action": {"action": "change_visibility"}}
+        assert ToolsManager(setup, reg).display_labels("tools_manager", args) == ("Tools Manager", "Change visibility")
+        assert KinsManager(setup, reg).display_labels("kins_manager", args) == ("Kins Manager", "Change visibility")
+
+    def test_inherited_action_keeps_its_label(self) -> None:
+        args = {"action": {"action": "update"}}
+        assert ServicesManager(*_stores()).display_labels("services_manager", args) == ("Services Manager", "Update")
+
+    def test_manager_llm_schema_has_no_display_name(self) -> None:
+        fn = ServicesManager(*_stores()).async_functions["services_manager"]
+        dumped = json.dumps(fn.to_dict(), ensure_ascii=False)
+        assert "display_name" not in dumped
+
+    def test_every_action_declares_a_label(self) -> None:
+        for cls in (
+            GetAction,
+            SearchAction,
+            UpdateAction,
+            DeleteAction,
+            ChangeVisibilityAction,
+            ListVersionsAction,
+            SetVersionAction,
+            CreateServiceAction,
+            StructureServiceAction,
+            LoadServiceAction,
+            UpdateServiceAction,
+        ):
+            assert cls.display_name
+            assert "_" not in cls.display_name

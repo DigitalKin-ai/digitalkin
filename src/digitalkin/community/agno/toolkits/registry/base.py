@@ -59,8 +59,11 @@ class BaseAction(BaseModel, ABC, Generic[CtxT]):
     Each concrete action declares an ``action`` ``Literal`` discriminator, carries its
     parameters as fields, and implements :meth:`execute`, which runs it against its manager's
     context ``CtxT`` and returns the raw result. Abstract, so it is never a valid discriminator
-    target and is never instantiated.
+    target and is never instantiated. ``display_name`` is the action's user-facing label; it is
+    a class variable, so it never enters the schema sent to the LLM.
     """
+
+    display_name: ClassVar[str | None] = None
 
     @abstractmethod
     async def execute(self, ctx: CtxT) -> Any:
@@ -249,6 +252,7 @@ class RegistryObjectToolKit(DkToolkit):
         actions: Any,
         description: str,
         entrypoint: Any,
+        display_name: str,
     ) -> None:
         """Initialize the toolkit with the module's setup and registry services.
 
@@ -260,8 +264,10 @@ class RegistryObjectToolKit(DkToolkit):
             actions: The discriminated action union this manager dispatches.
             description: The LLM-facing tool description.
             entrypoint: The bound ``manage_*`` method Agno calls (delegates to :meth:`_run`).
+            display_name: The manager's user-facing label.
         """
         self._name = name
+        self._actions = actions
         self._ctx_data = RegistryActionCtx(
             setup=setup, registry=registry, module_type=self.module_type, context=context
         )
@@ -277,7 +283,19 @@ class RegistryObjectToolKit(DkToolkit):
             entrypoint=entrypoint,
             skip_entrypoint_processing=True,
         )
-        super().__init__(name=name, tools=[tool], context=context)
+        super().__init__(name=name, tools=[tool], context=context, display_name=display_name)
+
+    def display_labels(self, function_name: str, tool_args: dict[str, Any] | str | None) -> tuple[str, str | None]:  # ruff: ignore[unused-method-argument]
+        """Label the manager and the action this call selects.
+
+        Args:
+            function_name: Technical name of the called function (the manager's single tool).
+            tool_args: Call arguments carrying the ``action`` discriminator.
+
+        Returns:
+            ``(manager label, action label)``.
+        """
+        return self.display_name, self.action_label(tool_args, self._actions)
 
     async def _run(self, action: Any = None, **fields: Any) -> str:
         """Validate a raw discriminated action then dispatch it.

@@ -178,12 +178,31 @@ class ReasoningCompletedEvent(BaseAgentRunEvent):
 
 
 class ToolInfo(BaseModel):
-    """Information about a tool call."""
+    """Information about a tool call.
+
+    ``tool_name`` stays technical (LLM function name); the two ``*_display_name`` fields are the
+    user-facing labels of the tool and of the called function.
+    """
 
     tool_call_id: str | None = Field(default=None, description="Unique identifier for this tool call")
     tool_name: str | None = Field(default=None, description="Name of the tool being called")
     tool_args: dict[str, Any] | str | None = Field(default=None, description="Arguments passed to the tool")
     result: str | None = Field(default=None, description="Result returned by the tool")
+    tool_display_name: str | None = Field(default=None, description="User-facing label of the tool")
+    function_display_name: str | None = Field(default=None, description="User-facing label of the called function")
+
+    @staticmethod
+    def humanize(name: str) -> str:
+        """Turn a technical tool or function name into a readable label.
+
+        Args:
+            name: Technical name, e.g. ``rag__search`` or ``ask_form``.
+
+        Returns:
+            The part after the last ``__``, underscores as spaces, first letter capitalized.
+        """
+        label = name.rpartition("__")[2].replace("_", " ")
+        return label[:1].upper() + label[1:]
 
 
 class ToolCallStartedEvent(BaseAgentRunEvent):
@@ -234,3 +253,18 @@ class SourceCitationEvent(CustomEvent):
 
     name: Literal["source_citation"] = Field("source_citation", description="Event name (discriminator)")
     value: SourceCitation = Field(..., description="The cited source")
+
+
+class MissionTitle(BaseModel):
+    """Title proposed for the current mission."""
+
+    title: str | None = Field(
+        ..., min_length=1, description="Mission title, null when every attempt found too little context"
+    )
+
+
+class MissionTitleEvent(CustomEvent):
+    """Custom event proposing a title for the current mission."""
+
+    name: Literal["mission_title"] = Field("mission_title", description="Event name (discriminator)")
+    value: MissionTitle = Field(..., description="The proposed title")

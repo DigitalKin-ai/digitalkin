@@ -227,6 +227,12 @@ def test_bind_host_noop_without_instance() -> None:
     ChatHistoryTools.bind_host(None, object())
 
 
+def test_display_labels_humanize_each_function() -> None:
+    tools = ChatHistoryTools()
+    assert tools.display_labels("read_chat_messages", {}) == ("Chat history", "Read chat messages")
+    assert tools.display_labels("outline_chat_history", {}) == ("Chat history", "Outline chat history")
+
+
 class _UnsavedSessionHost:
     """Bound Agent/Team whose session is not stored yet, or whose read fails."""
 
