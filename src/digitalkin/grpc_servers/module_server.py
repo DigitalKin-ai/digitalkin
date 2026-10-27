@@ -59,8 +59,7 @@ class ModuleServer(BaseServer):
         if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
             super().__init__(interceptors=[ValidationServerInterceptor(), *(interceptors or ())])
         else:
-            # TODO(validate): SYNC-NO-VALIDATION a sync server starts without the async validation interceptor
-            logger.warning("[VALIDATE SYNC-NO-VALIDATION] sync server: buf.validate request checks disabled")
+            logger.warning("sync server: buf.validate request checks disabled")
             super().__init__(interceptors=interceptors)
         self.module_class = module_class
         if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
@@ -335,9 +334,8 @@ class ModuleServer(BaseServer):
         await self._stop_async(grace)
 
         if self.module_servicer is not None:
-            # TODO(validate): SHUTDOWN-ORDER the gRPC server stops before running tasks are cancelled
             logger.info(
-                "[VALIDATE SHUTDOWN-ORDER] server stopped; cancelling %d running tasks",
+                "server stopped; cancelling %d running tasks",
                 len(self.module_servicer.job_manager.tasks),
             )
             try:

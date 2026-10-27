@@ -365,10 +365,8 @@ class StorageDb(AsyncBaseDb):
                     else:
                         runs[position] = run
                 if kept:
-                    # TODO(validate): SESSION-MERGE-KEEPS-RUNS a save never drops a stored run
                     logger.warning(
-                        "[VALIDATE SESSION-MERGE-KEEPS-RUNS] Session %s: save carried %d run(s), kept %d stored "
-                        "run(s) it lacked: %s",
+                        "Session %s: save carried %d run(s), kept %d stored run(s) it lacked: %s",
                         session_id,
                         len(incoming),
                         len(kept),
@@ -393,9 +391,8 @@ class StorageDb(AsyncBaseDb):
                             f"{content[: self.tool_result_chars]}\n\n"
                             f"[... truncated, original tool result was {len(content)} chars]"
                         )
-                        # TODO(validate): TOOL-RESULT-RETRUNCATE an old tool result is cut once, not on every save
                         logger.info(
-                            "[VALIDATE TOOL-RESULT-RETRUNCATE] Session %s: old tool result %s (%s) cut from %d to %d"
+                            "Session %s: old tool result %s (%s) cut from %d to %d"
                             " chars, dropped (first 100 chars): %.100s",
                             session_id,
                             msg.get("tool_call_id"),

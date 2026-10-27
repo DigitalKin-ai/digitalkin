@@ -85,7 +85,11 @@ class EnvTemplate:
 
     @classmethod
     def _render_value(cls, value: Any) -> str:
-        """Render a field default as an env-file value.
+        r"""Render a field default as an env-file value.
+
+        A value with whitespace, ``#``, ``$`` or a quote is quoted so env files read it whole
+        and literally: single quotes, or double quotes (``\\`` and ``"`` escaped) when it holds
+        a single quote.
 
         Args:
             value: The default to render.
@@ -96,12 +100,18 @@ class EnvTemplate:
         if value is None:
             return ""
         if isinstance(value, SecretStr):
-            return value.get_secret_value()
-        if isinstance(value, Enum):
-            return str(value.value)
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        return str(value)
+            text = value.get_secret_value()
+        elif isinstance(value, Enum):
+            text = str(value.value)
+        elif isinstance(value, bool):
+            text = "true" if value else "false"
+        else:
+            text = str(value)
+        if not any(char.isspace() or char in "#$'\"" for char in text):
+            return text
+        if "'" not in text:
+            return f"'{text}'"
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     @classmethod
     def _entries(cls, model: type[BaseSettings], *, minimum: bool) -> list[tuple[str, str, str, bool]]:
@@ -136,7 +146,7 @@ class EnvTemplate:
             if nested:
                 rows += nested
                 continue
-            value = str(extra["env_example"]) if "env_example" in extra else cls._render_value(field.default)
+            value = cls._render_value(extra.get("env_example", field.default))
             # Nothing to show — an absent default, or one this machine computes
             # (cpu_count) that must not be frozen into the template.
             rows.append((name, value, description, not required and not value))

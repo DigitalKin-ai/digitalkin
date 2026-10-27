@@ -124,9 +124,8 @@ class ModuleRunner:
                 except (TypeError, ValueError):
                     errors_json = repr(exc.errors())
                 missing_paths = [".".join(str(p) for p in e["loc"]) for e in exc.errors() if e["type"] == "missing"]
-                # TODO(validate): SETUP-VALIDATION setup ValidationError surfaces as SETUP_VALIDATION_ERROR
                 logger.error(
-                    "[VALIDATE SETUP-VALIDATION] ValidationError on setup model: module_class=%s missing=%s errors=%s",
+                    "ValidationError on setup model: module_class=%s missing=%s errors=%s",
                     self._servicer.module_class.__name__,
                     missing_paths,
                     errors_json,
@@ -155,32 +154,21 @@ class ModuleRunner:
                 data = output_data.model_dump(mode="json")
                 if data.get("root", {}).get("protocol") == "stream.end":
                     if eos_written:
-                        # TODO(validate): EOS-ONCE a stream gets a single end-of-stream marker
-                        logger.info("[VALIDATE EOS-ONCE] duplicate stream.end skipped", extra=log_extra)
+                        logger.info("duplicate stream.end skipped", extra=log_extra)
                         return
-                    t_eos_write_start = time.perf_counter_ns()
                     await self._redis_client.xadd(stream_key, {"eos": b"true"})
                     eos_written = True
                     await self._redis_client.expire(stream_key, stream_settings.redis_stream_ttl)
                     await self._redis_client.expire(idem_key, stream_settings.redis_stream_ttl)
-                    # TODO(validate): IDEM-TTL-EOS idem TTL drops to redis_stream_ttl once EOS is written
-                    logger.info("[VALIDATE IDEM-TTL-EOS] idem TTL shortened after EOS", extra=log_extra)
                     t_eos_write_end = time.perf_counter_ns()
                     run_s = (t_eos_write_end - runner_start_ns) / 1e9
                     if run_s > stream_settings.redis_stream_initial_ttl:
-                        # TODO(validate): TTL-REFRESH long task kept its stream + idem alive until EOS
                         logger.info(
-                            "[VALIDATE TTL-REFRESH] EOS written after %.0fs (> initial TTL %ds); stream + idem kept",
+                            "EOS written after %.0fs (> initial TTL %ds); stream + idem kept",
                             run_s,
                             stream_settings.redis_stream_initial_ttl,
                             extra=log_extra,
                         )
-                    logger.info(
-                        "[close-debug] producer_eos_write: xadd_expire=%.2fms t_done_ns=%d task_id=%s",
-                        (t_eos_write_end - t_eos_write_start) / 1e6,
-                        t_eos_write_end,
-                        task_id,
-                    )
                     return
 
                 seq += 1
@@ -209,12 +197,6 @@ class ModuleRunner:
 
             top_level_keys = list(query.fields.keys())
             query_byte_size = query.ByteSize()
-            logger.info(
-                "[input-debug] inbound Struct: top_keys=%s wire_bytes=%d",
-                top_level_keys,
-                query_byte_size,
-                extra=log_extra,
-            )
             input_dict = json_format.MessageToDict(query)
             timer.mark("struct_to_dict")
 
@@ -223,8 +205,7 @@ class ModuleRunner:
 
             cancel_key = f"cancel:{task_id}"
             if await self._redis_client.exists(cancel_key):
-                # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
-                logger.info("[VALIDATE CANCEL-TOMBSTONE] cancelled before preload; aborting", extra=log_extra)
+                logger.info("cancelled before preload; aborting", extra=log_extra)
                 await _on_output(
                     DataModel[StreamCancelledOutput](
                         root=StreamCancelledOutput(reason=CancellationReason.SIGNAL_SERVICE_CANCEL.value),
@@ -252,8 +233,7 @@ class ModuleRunner:
             timer.mark("preload_join")
 
             if await self._redis_client.exists(cancel_key):
-                # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
-                logger.info("[VALIDATE CANCEL-TOMBSTONE] cancelled after preload; stopping instance", extra=log_extra)
+                logger.info("cancelled after preload; stopping instance", extra=log_extra)
                 cancel_reason = CancellationReason.SIGNAL_SERVICE_CANCEL.value
                 return
 
@@ -277,8 +257,6 @@ class ModuleRunner:
                     if remaining_s > 0:
                         await asyncio.sleep(remaining_s)
                         continue
-                    # TODO(validate): TASK-HEARTBEAT a silent running task keeps its stream open
-                    logger.info("[VALIDATE TASK-HEARTBEAT] task silent for %.0fs; beating", interval_s, extra=log_extra)
                     run = module.context.agui_run
                     try:
                         if run is not None and run.open:
@@ -308,17 +286,13 @@ class ModuleRunner:
                 task = self._servicer.job_manager.tasks.get(job_id)
                 session = self._servicer.job_manager.tasks_sessions.get(job_id)
                 if task is not None and session is not None and not task.done() and not session.pending_signal_action:
-                    # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
-                    logger.info(
-                        "[VALIDATE CANCEL-TOMBSTONE] cancelled during registration; cancelling task", extra=log_extra
-                    )
+                    logger.info("cancelled during registration; cancelling task", extra=log_extra)
                     session.pending_signal_action = "cancel"
                     task.cancel()
 
         except asyncio.CancelledError:
             if not created:
-                # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
-                logger.warning("[VALIDATE RUNNER-LEAK] runner cancelled before the task started", extra=log_extra)
+                logger.warning("runner cancelled before the task started", extra=log_extra)
                 await on_fatal(
                     StreamErrorCode.MODULE_RUNTIME_ERROR.value,
                     "module runner cancelled before the task started",
@@ -337,7 +311,7 @@ class ModuleRunner:
                 errors_json = repr(exc.errors())
             missing_paths = [".".join(str(p) for p in e["loc"]) for e in exc.errors() if e["type"] == "missing"]
             logger.error(
-                "[input-debug] ValidationError on input model %s\n"
+                "ValidationError on input model %s\n"
                 "  module_class=%s top_keys=%s wire_bytes=%d missing=%s\n"
                 "  errors=%s\n"
                 "  input_dict=%s",
@@ -352,8 +326,7 @@ class ModuleRunner:
             )
             output_format = self._servicer.module_class.output_format
             if input_dict is not None and isinstance(output_format, type) and issubclass(output_format, AgUiOutput):
-                # TODO(validate): AGUI-INPUT-RUN-ERROR an AG-UI client sees RUN_ERROR for an invalid run input
-                logger.info("[VALIDATE AGUI-INPUT-RUN-ERROR] invalid run input; emitting RUN_ERROR", extra=log_extra)
+                logger.info("invalid run input; emitting RUN_ERROR", extra=log_extra)
                 await _on_output(
                     AgUiOutput(
                         root=AgUiRunErrorOutput(
@@ -388,10 +361,7 @@ class ModuleRunner:
         finally:
             if module is not None and not created and module.status not in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
                 if cancel_reason is None:
-                    # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
-                    logger.warning(
-                        "[VALIDATE RUNNER-LEAK] task never created; stopping preloaded instance", extra=log_extra
-                    )
+                    logger.warning("task never created; stopping preloaded instance", extra=log_extra)
                     # Only a failure path gets here, and on_fatal already wrote stream.error + EOS.
                     eos_written = True
                 try:

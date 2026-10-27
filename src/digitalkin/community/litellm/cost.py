@@ -182,9 +182,8 @@ class CostTrackingLogger(CustomLogger):
             return
         entry = CostRegistry.get(mission_id)
         if entry is None:
-            # TODO(validate): LLM-COST-UNREGISTERED an unbilled LLM call is logged, never dropped silently
             logger.warning(
-                "[VALIDATE LLM-COST-UNREGISTERED] LLM call of mission %s not billed: no cost service registered",
+                "LLM call of mission %s not billed: no cost service registered",
                 mission_id,
             )
             return

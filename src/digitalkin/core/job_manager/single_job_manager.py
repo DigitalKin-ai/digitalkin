@@ -153,8 +153,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         )
         session = TaskSession(job_id, mission_id, module)
         self._config_sessions[job_id] = session
-        # TODO(validate): CONFIG-SLOT config sessions are tracked outside the task slots
-        logger.info("[VALIDATE CONFIG-SLOT] config session tracked outside task slots", extra={"task_id": job_id})
+        logger.info("config session tracked outside task slots", extra={"task_id": job_id})
 
         try:
             await module.start_config_setup(
@@ -301,8 +300,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             await module.prepare(setup_data, callback)
         except BaseException:
             # stop() is skipped: its stream.end would land before the caller's stream.error.
-            # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
-            logger.warning("[VALIDATE RUNNER-LEAK] prepare failed; releasing instance", extra={"task_id": job_id})
+            logger.warning("prepare failed; releasing instance", extra={"task_id": job_id})
             try:
                 await module.cleanup()
             finally:

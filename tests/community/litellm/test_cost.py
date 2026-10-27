@@ -234,7 +234,7 @@ class TestSuccessEvent:
         with caplog.at_level(logging.WARNING, logger="digitalkin"):
             await CostTrackingLogger().async_log_success_event(kwargs, self._response(), None, None)
 
-        assert any("LLM-COST-UNREGISTERED" in record.getMessage() for record in caplog.records)
+        assert any("not billed: no cost service registered" in record.getMessage() for record in caplog.records)
 
     async def test_a_failure_never_escapes(self, mission: FakeCost):
         async def boom(*_: Any) -> None:

@@ -272,10 +272,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise
             except ServerError as e:
                 msg = f"Failed to search modules: {e}"
-                # TODO(validate): SEARCH-DEADLINE tightened registry search deadline does not cause spurious failures
-                logger.error(
-                    "[VALIDATE SEARCH-DEADLINE] %s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s
-                )
+                logger.error("%s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s)
                 raise RegistryServiceError(msg) from e
 
             results = self.successful_results("SearchModules", response.results)
@@ -447,10 +444,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         try:
             proto_enum.Value(member.name)
         except ValueError:
-            # TODO(validate): ENUM-ENCODE registry filter enums always encode to a proto member
-            logger.error(
-                "[VALIDATE ENUM-ENCODE] no proto member %s — refused before reaching the registry", member.name
-            )
+            logger.error("no proto member %s — refused before reaching the registry", member.name)
             raise
         return member.name
 
@@ -554,10 +548,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise
             except ServerError as e:
                 msg = f"Failed to search setups: {e}"
-                # TODO(validate): SEARCH-DEADLINE tightened registry search deadline does not cause spurious failures
-                logger.error(
-                    "[VALIDATE SEARCH-DEADLINE] %s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s
-                )
+                logger.error("%s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s)
                 raise RegistryServiceError(msg) from e
 
             return [
