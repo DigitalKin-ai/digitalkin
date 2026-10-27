@@ -114,11 +114,11 @@ class M2MCallRegistry:
         """``host:port`` the local gateway advertises as its dial-back target.
 
         Returns:
-            ``host:port`` string from channel settings (``advertise_host`` falls back to ``host``).
+            ``host:port`` string from channel settings (``advertise_host`` / ``advertise_port`` fall back to
+            ``host`` / ``port``).
         """
-        ch = get_server_channel_settings()
-        host = ch.advertise_host or ch.host
-        return f"{host}:{ch.port}"
+        host, port = get_server_channel_settings().advertise_address
+        return f"{host}:{port}"
 
     async def start(self) -> None:
         """Spawn the TTL sweeper task."""

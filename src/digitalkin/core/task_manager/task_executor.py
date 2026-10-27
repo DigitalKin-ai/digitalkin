@@ -127,8 +127,7 @@ class TaskExecutor:
             if started:
                 return
             coro.close()
-            # TODO(validate): CANCEL-EARLY a task cancelled before its first step is finalized
-            logger.warning("[VALIDATE CANCEL-EARLY] task cancelled before its first step; finalizing", extra=ids)
+            logger.warning("task cancelled before its first step; finalizing", extra=ids)
             fin = asyncio.create_task(_early_cancel(), name=f"{task_id}_backstop")
             self._backstops.add(fin)
             fin.add_done_callback(self._backstops.discard)

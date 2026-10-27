@@ -12,10 +12,12 @@ import sys
 import types
 from enum import Enum
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 import digitalkin.community.agno  # (real agno loads before the fakes below replace it)
+from digitalkin.community.agno.toolkits import LoadManager, ServicesManager
 from digitalkin.models.events import (
     AgentRunEvent,
     CustomEvent,
@@ -1147,78 +1149,84 @@ def test_tool_call_started_closes_reasoning_and_content() -> None:
     assert started.tool.tool_args == {"q": "x"}
 
 
-def test_manager_tool_name_is_suffixed_with_action() -> None:
-    """A registry-manager call surfaces its action: services_manager → services_manager_create."""
+def _manager_toolkits() -> dict[str, Any]:
+    """The function name -> toolkit map the HITL runner hands the adapter, for two managers."""
+    return {"services_manager": ServicesManager(Mock(), Mock()), "load_manager": LoadManager()}
+
+
+def test_manager_call_keeps_technical_name_and_carries_labels() -> None:
+    """A manager call keeps toolCallName technical; the labels travel beside it."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-    adapter = AgnoStreamAdapter()
-    tool = _make_tool(
-        tool_call_id="tc1",
-        tool_name="services_manager",
-        tool_args={"action": {"action": "create", "name": "x", "content": {"a": 1}}},
-    )
+    adapter = AgnoStreamAdapter(toolkits=_manager_toolkits())
+    args = {"action": {"action": "create", "name": "x", "content": {"a": 1}}}
+    tool = _make_tool(tool_call_id="tc1", tool_name="services_manager", tool_args=args)
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
     started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
     assert started.tool is not None
-    assert started.tool.tool_name == "services_manager_create"
-    # Args are still forwarded verbatim — only the display name changes.
-    assert started.tool.tool_args == {"action": {"action": "create", "name": "x", "content": {"a": 1}}}
+    assert started.tool.tool_name == "services_manager"
+    assert (started.tool.tool_display_name, started.tool.function_display_name) == ("Services Manager", "Create")
+    assert started.tool.tool_args == args
 
 
-def test_manager_tool_name_suffix_on_completed() -> None:
-    """The suffix is applied on completion too, so start/end labels match."""
+def test_manager_labels_on_completed() -> None:
+    """Completion carries the same labels as the start."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-    adapter = AgnoStreamAdapter()
+    adapter = AgnoStreamAdapter(toolkits=_manager_toolkits())
     tool = _make_tool(
         tool_call_id="tc1",
-        tool_name="kins_manager",
-        tool_args={"action": {"action": "get", "setup_id": "s"}},
+        tool_name="services_manager",
+        tool_args={"action": '{"action": "search", "query": "zzz"}'},
         result="ok",
     )
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_completed, tool=tool, content="ok"))
     assert result[0].tool is not None
-    assert result[0].tool.tool_name == "kins_manager_get"
+    assert result[0].tool.tool_name == "services_manager"
+    assert (result[0].tool.tool_display_name, result[0].tool.function_display_name) == ("Services Manager", "Search")
 
 
-def test_manager_tool_name_from_stringified_action() -> None:
-    """Some models send the nested action as a JSON string — surface the discriminator, not the blob."""
+def test_manager_labels_on_error() -> None:
+    """A tool-call error carries the labels, resolved from the call's own arguments."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-    adapter = AgnoStreamAdapter()
-    tool = _make_tool(
-        tool_call_id="tc1",
-        tool_name="tools_manager",
-        tool_args={"action": '{"action": "search", "query": "zzz", "limit": 5}'},
+    adapter = AgnoStreamAdapter(toolkits=_manager_toolkits())
+    tool = _make_tool(tool_call_id="tc1", tool_name="services_manager", tool_args={"action": {"action": "delete"}})
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_error, tool=tool, content="boom"))
+    assert isinstance(result[0], ToolCallErrorEvent)
+    assert result[0].tool is not None
+    assert (result[0].tool.tool_display_name, result[0].tool.function_display_name) == ("Services Manager", "Delete")
+
+
+def test_unknown_function_is_humanized() -> None:
+    """A tool no toolkit owns (an AG-UI frontend tool) keeps its name and gets a humanized label."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    tool = _make_tool(tool_call_id="tc1", tool_name="ask_form", tool_args={})
+    result = AgnoStreamAdapter().to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.tool is not None
+    assert (started.tool.tool_name, started.tool.tool_display_name, started.tool.function_display_name) == (
+        "ask_form",
+        "Ask form",
+        None,
     )
-    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
-    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
-    assert started.tool is not None
-    assert started.tool.tool_name == "tools_manager_search"  # not tools_manager_{"action": ...}
 
 
-def test_non_manager_tool_name_is_unchanged() -> None:
-    """A plain tool keeps its name even when it carries an 'action' argument."""
+def test_manager_without_readable_action_has_no_function_label() -> None:
+    """A manager call with unreadable args keeps the manager label only."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-    adapter = AgnoStreamAdapter()
-    tool = _make_tool(tool_call_id="tc1", tool_name="search", tool_args={"action": "noop"})
+    adapter = AgnoStreamAdapter(toolkits=_manager_toolkits())
+    tool = _make_tool(tool_call_id="tc1", tool_name="services_manager", tool_args=None)
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
     started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
     assert started.tool is not None
-    assert started.tool.tool_name == "search"
-
-
-def test_manager_tool_name_unchanged_when_action_absent() -> None:
-    """A manager call with unreadable args falls back to the bare manager name."""
-    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
-
-    adapter = AgnoStreamAdapter()
-    tool = _make_tool(tool_call_id="tc1", tool_name="tools_manager", tool_args=None)
-    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
-    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
-    assert started.tool is not None
-    assert started.tool.tool_name == "tools_manager"
+    assert (started.tool.tool_name, started.tool.tool_display_name, started.tool.function_display_name) == (
+        "services_manager",
+        "Services Manager",
+        None,
+    )
 
 
 def test_tool_call_started_without_tool() -> None:
@@ -1370,11 +1378,11 @@ def test_run_paused_synthesizes_tool_events_for_external_tool() -> None:
     assert "ext1" in adapter._closed_tool_call_ids
 
 
-def test_run_paused_suffixes_manager_action_in_display_name() -> None:
-    """An external-execution manager (load_manager) surfaces its action, like the CRUD managers."""
+def test_run_paused_carries_manager_labels() -> None:
+    """An external-execution manager (load_manager) keeps its name and carries its labels."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-    adapter = AgnoStreamAdapter()
+    adapter = AgnoStreamAdapter(toolkits=_manager_toolkits())
     tool = _make_tool_execution(
         tool_call_id="load1",
         tool_name="load_manager",
@@ -1384,10 +1392,13 @@ def test_run_paused_suffixes_manager_action_in_display_name() -> None:
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_paused, tools=[tool], requirements=[]),
     )
-    started = result[0]
+    started, completed = result[0], result[1]
     assert isinstance(started, ToolCallStartedEvent)
-    assert started.tool is not None
-    assert started.tool.tool_name == "load_manager_tool"
+    assert isinstance(completed, ToolCallCompletedEvent)
+    for event in (started, completed):
+        assert event.tool is not None
+        assert event.tool.tool_name == "load_manager"
+        assert (event.tool.tool_display_name, event.tool.function_display_name) == ("Load Manager", "Load tool")
 
 
 def test_run_paused_skips_backend_only_tools() -> None:
@@ -1949,7 +1960,7 @@ def test_metadata_switches_between_team_and_agent_events() -> None:
 
 
 def test_realistic_sequence_with_reasoning_text_tool_and_pause() -> None:
-    """think → reasoning_step → text → search → analyze → reasoning_step → text → frontend pause."""
+    """Think → reasoning_step → text → search → analyze → reasoning_step → text → frontend pause."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -2219,3 +2230,106 @@ def test_model_citations_emitted_once_per_url() -> None:
     assert done[0].value.title == "C"
     assert kinds.count(SourceCitationEvent) == 1
     assert kinds[-1] is RunCompletedEvent
+
+
+# ── Model labels ────────────────────────────────────────────────────────────
+
+
+def _served(name: str, requested: str | None = None) -> dict[str, Any]:
+    """``model_provider_data`` of a content event whose LLM call reported its served model."""
+    from digitalkin.models.events import ModelInfo
+
+    return {ModelInfo.PROVIDER_DATA_KEY: {"name": name, "requested_name": requested}}
+
+
+def test_messages_carry_the_configured_model_from_run_started() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, content="hi"))
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("claude-opus-4-5", None)
+
+
+def test_fallback_reported_by_the_model_replaces_the_configured_one() -> None:
+    """The first delta of a fallen-back call names the served model before any text opens."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="hi",
+            model_provider_data=_served("claude-sonnet-4.5", "claude-opus-4-5"),
+        )
+    )
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("claude-sonnet-4.5", "claude-opus-4-5")
+
+
+def test_tool_only_call_labels_its_tool_call_with_the_served_model() -> None:
+    """A delta with no text but the served model still labels the tool call that follows."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="gpt-5.1"))
+    silent = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_content, model_provider_data=_served("gpt-5", "gpt-5.1"))
+    )
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.tool_call_started, tool=_make_tool(tool_call_id="tc1", tool_name="search"))
+    )
+
+    assert silent == []
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("gpt-5", "gpt-5.1")
+
+
+def test_reasoning_carries_the_model() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, reasoning_content="thinking"))
+
+    started = next(e for e in result if isinstance(e, ReasoningStartedEvent))
+    assert started.model is not None
+    assert started.model.name == "claude-opus-4-5"
+
+
+def test_members_keep_their_own_model() -> None:
+    """A team member's messages carry the member's model, not the leader's."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team", model="claude-opus-4-5"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team", model="gemini-3.8-flash")
+    )
+    member = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, run_id="m1", content="member"))
+    leader = adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_content, run_id="team", content="lead"))
+
+    member_start = next(e for e in member if isinstance(e, TextMessageStartedEvent))
+    leader_start = next(e for e in leader if isinstance(e, TextMessageStartedEvent))
+    assert member_start.model is not None
+    assert member_start.model.name == "gemini-3.8-flash"
+    assert leader_start.model is not None
+    assert leader_start.model.name == "claude-opus-4-5"
+
+
+def test_no_model_known_sends_no_model() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, content="hi"))
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is None

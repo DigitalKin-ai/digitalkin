@@ -14,7 +14,7 @@ from agno.models.message import Message
 from agno.utils.tokens import count_tokens
 
 from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
-from digitalkin.community.agno.compaction import DkCompaction, HistoryCompactor, TokenCalibration
+from digitalkin.community.agno.compaction import ContextSize, DkCompaction, HistoryCompactor, TokenCalibration
 from digitalkin.community.agno.db import AGNO_STORAGE_CONFIG, StorageDb
 from digitalkin.services.storage.default_storage import DefaultStorage
 
@@ -88,17 +88,23 @@ def _ids(messages: list[Message]) -> list[str]:
 
 
 class TestThreshold:
-    def test_large_window_uses_the_cap(self) -> None:
-        assert HistoryCompactor.threshold(1_000_000, 600_000, 0.9) == 600_000
+    @pytest.mark.parametrize(
+        ("size", "large", "small"),
+        [
+            (ContextSize.LARGE, 900_000, 180_000),
+            (ContextSize.MEDIUM, 700_000, 140_000),
+            (ContextSize.SMALL, 500_000, 100_000),
+        ],
+    )
+    def test_a_share_of_the_window(self, size: ContextSize, large: int, small: int) -> None:
+        assert HistoryCompactor.threshold(1_000_000, size.value) == large
+        assert HistoryCompactor.threshold(200_000, size.value) == small
 
-    def test_small_window_uses_the_ratio(self) -> None:
-        assert HistoryCompactor.threshold(200_000, 600_000, 0.9) == 180_000
-
-    def test_unknown_window_uses_the_cap(self) -> None:
-        assert HistoryCompactor.threshold(0, 600_000, 0.9) == 600_000
+    def test_unknown_window_uses_200k(self) -> None:
+        assert HistoryCompactor.threshold(0, ContextSize.SMALL.value) == 200_000
 
     def test_never_below_one(self) -> None:
-        assert HistoryCompactor.threshold(1, 600_000, 0.5) == 1
+        assert HistoryCompactor.threshold(1, 0.5) == 1
 
 
 class TestSplitRequest:
@@ -276,7 +282,6 @@ def _build(context_window: int = 1_000_000, summary_context_window: int = 1_000_
         db=_Db(),  # type: ignore[arg-type]
         session_id="s1",
         model_id="gpt-5",
-        max_tokens=600_000,
         window_ratio=0.9,
         uncompacted_runs=5,
     )
@@ -286,7 +291,7 @@ class TestBuild:
     def test_sized_from_the_window(self) -> None:
         compactor = _build()
 
-        assert compactor.compaction.compact_at_tokens == 600_000
+        assert compactor.compaction.compact_at_tokens == 900_000
         assert compactor.compaction.uncompacted_runs == 5
         assert compactor.compaction.store_compacted_messages is False
         assert compactor.compaction.search_compacted_messages is False
@@ -295,7 +300,7 @@ class TestBuild:
     def test_the_summarizer_read_is_sized_from_its_own_window(self) -> None:
         compactor = _build(summary_context_window=200_000)
 
-        assert compactor.compaction.compact_at_tokens == 600_000, "the threshold follows the head model"
+        assert compactor.compaction.compact_at_tokens == 900_000, "the threshold follows the head model"
         assert compactor.compaction.summarize_char_budget == 400_000
 
     def test_the_summarizer_read_never_drops_below_agnos_budget(self) -> None:
@@ -448,6 +453,62 @@ class TestCalibratedCompactor:
 
     def test_built_with_the_provider_threshold(self) -> None:
         assert _build(context_window=200_000).threshold_tokens == 180_000
+
+
+class TestMidRunFold:
+    """A tool loop growing past the threshold folds the history on the provider's count."""
+
+    @staticmethod
+    async def _measured(summarizer: _Summarizer, db: _Db) -> tuple[HistoryCompactor, list[Message]]:
+        compactor = _compactor(summarizer, db, compact_at_tokens=1_000_000)
+        compactor.threshold_tokens = 1_000_000
+        messages = _request(_history(4))
+        await compactor.view(messages)
+        assert summarizer.requests == [], "the first call is under the threshold"
+        return compactor, messages
+
+    async def test_a_count_past_the_threshold_folds_once(self) -> None:
+        summarizer = _Summarizer()
+        compactor, messages = await self._measured(summarizer, _Db())
+
+        await compactor.observe(messages, None, 1_000_001)
+        sent = await compactor.view(messages)
+
+        assert len(summarizer.requests) == 1
+        assert sent[1].content.startswith(SUMMARY_PREFIX)
+        assert compactor._last_provider_tokens is None, "the count was for the unfolded request"
+
+    async def test_a_count_under_the_threshold_does_not_fold(self) -> None:
+        summarizer = _Summarizer()
+        compactor, messages = await self._measured(summarizer, _Db())
+
+        await compactor.observe(messages, None, 999_999)
+
+        assert await compactor.view(messages) == messages
+        assert summarizer.requests == []
+
+    async def test_a_failed_mid_run_fold_is_not_retried_on_every_call(self) -> None:
+        summarizer = _Summarizer(RuntimeError("summarizer down"))
+        compactor, messages = await self._measured(summarizer, _Db())
+
+        for _ in range(3):
+            await compactor.observe(messages, None, 2_000_000)
+            assert await compactor.view(messages) == messages, "sent uncompacted"
+
+        assert len(summarizer.requests) == 1, "a run whose context stays full is not summarized on every call"
+
+    async def test_a_fallback_count_folds_but_never_calibrates(self) -> None:
+        db = _Db()
+        summarizer = _Summarizer()
+        compactor, messages = await self._measured(summarizer, db)
+
+        await compactor.observe(messages, None, 1_000_001, calibrate=False)
+
+        assert compactor._calibration.samples == []
+        assert compactor._calibrated is False, "the next head-model response still calibrates"
+        assert "token_samples" not in db.records.get("s1", {})
+        await compactor.view(messages)
+        assert len(summarizer.requests) == 1
 
 
 class TestSummarizerTranscript:

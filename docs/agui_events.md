@@ -9,7 +9,9 @@ Each frame is the `data` Struct of one `StreamClient`:
 ```json
 {"root": {"protocol": "agui_tool_call_start", "createdAt": "…",
   "event": {"type": "TOOL_CALL_START", "toolCallId": "…", "toolCallName": "…",
-            "subagentRunId": "…", "metadata": {"digitalkin": {…}}}},
+            "subagentRunId": "…",
+            "metadata": {"digitalkin": {…}, "toolDisplayName": "…", "functionDisplayName": "…",
+                         "model": "…", "requestedModel": "…"}}},
  "annotations": {}}
 ```
 
@@ -18,7 +20,7 @@ Each frame is the `data` Struct of one `StreamClient`:
 - `subagentRunId` names the delegated agent that produced the event; group on it. Run-level events never carry it.
 - Fields are camelCase. Optional fields are absent, never `null`; `null` only appears inside application data (`STATE_*` values and patch `value`, `CUSTOM.value`, activity `content`).
 - No event leaves with an empty or invented id: an event whose id is missing is dropped and logged (`[VALIDATE AGUI-EMPTY-ID]`), since a 1.x client fails the run on a continuation or close of a message it never saw opened.
-- SDK data rides only in `metadata.digitalkin`; the `ag-ui` key is reserved. A 1.x client merges event `metadata` onto the message it builds and sends it back in `RunAgentInput`, so nothing secret is ever written there.
+- SDK data rides in `metadata.digitalkin`, except the tool-call labels `metadata.toolDisplayName` / `metadata.functionDisplayName` on `TOOL_CALL_START` and the [model labels](#models) `metadata.model` / `metadata.requestedModel`; the `ag-ui` key is reserved. A 1.x client merges event `metadata` onto the message it builds and sends it back in `RunAgentInput`, so nothing secret is ever written there.
 
 ## Pipeline state
 
@@ -27,8 +29,9 @@ Each frame is the `data` Struct of one `StreamClient`:
 ```json
 {
   "run": {"status": "running", "error": null, "heartbeatAt": null},
-  "tools": {"<toolCallId>": {"name": "search", "status": "running", "subagentRunId": null,
-                             "startedAt": 1759650000000, "error": null}},
+  "tools": {"<toolCallId>": {"name": "rag__search", "toolDisplayName": "Document search",
+                             "functionDisplayName": "Search documents", "status": "running",
+                             "subagentRunId": null, "startedAt": 1759650000000, "error": null}},
   "subagents": {"<subagentRunId>": {"name": "writer", "status": "running", "startedAt": 1759650000000, "error": null}},
   "interrupts": [{"id": "…", "reason": "tool_call", "toolCallId": "…", "message": "Waiting for the result of …"}]
 }
@@ -68,16 +71,45 @@ A tool call, text or reasoning message still open when the run completes is clos
 | `agui_reasoning_start`, `agui_reasoning_message_start` / `_content` / `_end`, `agui_reasoning_end` | REASONING_* | Collapsible "thinking" block |
 | `agui_messages_snapshot` | MESSAGES_SNAPSHOT | Not sent by the SDK itself; a module may send one from `PauseInfo.new_messages`. It carries no activity messages, so the front keeps its `sources` |
 
+## Models
+
+Every `TEXT_MESSAGE_START`, `REASONING_START` / `REASONING_MESSAGE_START` and `TOOL_CALL_START` names the LLM that
+produced it, in its `metadata` beside `digitalkin`; the client merges it onto the message or tool call it builds:
+
+| Field | Content | Example |
+|---|---|---|
+| `model` | The model that answered: the proxy model group that served the LLM call, else the agent's configured model | `claude-sonnet-4.5` |
+| `requestedModel` | The model that was asked for. Sent **only** when a LiteLLM fallback replaced it, so its presence alone means a fallback happened | `claude-opus-4-5` |
+
+- The served model comes from the LiteLLM proxy's response headers (`x-litellm-model-group`,
+  `x-litellm-attempted-fallbacks`), read by `SafeLiteLLM` on the first chunk of each LLM call. The body's `model` is not
+  used: on a stream the proxy restamps every chunk with the requested model, fallback or not.
+- One run makes several LLM calls (one per tool round): each sequence carries the model of the call that opened it, so
+  a fallback on one round labels only what that round produced.
+- A team member's sequences carry the member's model.
+- A model that is not a `SafeLiteLLM` behind the proxy sends its configured model and never `requestedModel`. A run
+  resumed after a human pause has no configured model to read: its sequences carry `model` from its first LLM call on.
+- No model known: no `model` key.
+
 ## Tool calls
 
 | Protocol | Type | Emitted when | Front usage |
 |---|---|---|---|
-| `agui_tool_call_start` | TOOL_CALL_START | A tool is invoked; `toolCallName` is the display name (`<manager>_<action>` for managers) | Add a tool card |
+| `agui_tool_call_start` | TOOL_CALL_START | A tool is invoked | Add a tool card titled with `metadata.toolDisplayName` and `metadata.functionDisplayName` |
 | `agui_tool_call_args` | TOOL_CALL_ARGS | Right after start; the whole args JSON in one `delta` | Show arguments |
 | `agui_tool_call_end` | TOOL_CALL_END | The tool finished, failed, or paused for input | Stop the spinner |
 | `agui_tool_call_result` | TOOL_CALL_RESULT | The tool returned, **or failed** with `content = {"error": …}` | Show the result; failure is also `tools.<id>.status = failed` |
 
 AG-UI's `TOOL_CALL_RESULT` has no error flag, so read the state for the outcome rather than parsing `content`.
+
+`toolCallName` stays the technical function name the LLM called (`services_manager`, `rag__search`, `ask_form`): the front dispatches frontend tools on it and the AG-UI client writes it into the message history. Show the labels instead; they ride in the event's `metadata`, beside `digitalkin`, and an absent label is not sent:
+
+| Field | Content | Example |
+|---|---|---|
+| `toolDisplayName` | The tool: a module tool's registry setup name, a manager's or SDK toolkit's label, else the humanized function name | `Document search`, `Services Manager`, `Ask form` |
+| `functionDisplayName` | The called function: the trigger's `display_name` (always set for a module tool, even with a single trigger), a manager action's label, a humanized name for a multi-function SDK toolkit. Absent for a single-function SDK toolkit, a frontend tool, a team member's tool, or when the run has no toolkit map (`AgnoStreamAdapter()` built without `toolkits`) | `Search documents`, `Create` |
+
+Both are also in the state entry `tools.<id>`, where an absent label is `null`.
 
 ## Subagents
 

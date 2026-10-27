@@ -80,7 +80,9 @@ class TestWiring:
         assert litellm.use_litellm_proxy is True
         assert (model.id, model.api_base, model.api_key, model.max_tokens) == ("gpt-5", "http://proxy", "token", 4096)
         assert model.top_p is None
-        assert model.extra_headers == {"langfuse_session_id": "m"}
+        assert model.extra_headers == {"langfuse_session_id": "m", "x-litellm-session-id": "mission-1"}, (
+            "the proxy's session affinity reads the header, not the body field"
+        )
         assert model.extra_body == {"litellm_session_id": "mission-1"}
         assert model.request_params == {
             "drop_params": True,

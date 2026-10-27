@@ -75,7 +75,7 @@ class TestAgUiStreamInput:
 
         assert [type(part) for part in message.content] == [TextPart]
         (template, message_id, file_id, filename, mime), _ = log.warning.call_args
-        assert template.startswith("[VALIDATE AGUI-BINARY-UPGRADE]")
+        assert template.startswith("message %s: binary part dropped")
         assert (message_id, file_id, filename, mime) == ("u1", "f1", "a.pdf", "application/pdf")
 
     def test_modern_parts_and_other_messages_are_untouched(self) -> None:

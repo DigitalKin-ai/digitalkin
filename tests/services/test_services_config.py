@@ -6,15 +6,14 @@ import pytest
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.services.storage import ChatHistory, MissionRecord
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.secret.grpc_secret import GrpcSecret
 from digitalkin.services.services_config import ServicesConfig
 
 
 def _client_config(host: str = "[::]", port: int = 50051) -> ClientConfig:
-    return ClientConfig(
-        host=host, port=port, mode=ControlFlow.ASYNC, security=SecurityMode.INSECURE, credentials=None
-    )
+    return ClientConfig(host=host, port=port, mode=ControlFlow.ASYNC, security=SecurityMode.INSECURE, credentials=None)
 
 
 class TestSingletonStrategies:
@@ -102,6 +101,36 @@ class TestSecretConfigInheritance:
         assert config.get_strategy_config("secret")["client_config"] is secret_cfg
 
 
+class TestMissionCollection:
+    """The SDK-owned ``mission`` collection is registered on every module's storage."""
+
+    def test_registered_without_module_config(self) -> None:
+        config = ServicesConfig(mode=ServicesMode.LOCAL)
+
+        assert config.get_strategy_config("storage")["config"] == {"mission": MissionRecord}
+        storage = config.init_strategy("storage", "m", "s", "sv")
+        assert storage.config["mission"] is MissionRecord
+
+    def test_added_to_module_collections_without_mutating_them(self) -> None:
+        module_config = {"chat_history": ChatHistory}
+        params = {"storage": {"config": module_config}}
+
+        config = ServicesConfig(services_config_params=params, mode=ServicesMode.LOCAL)
+
+        assert config.get_strategy_config("storage")["config"] == {
+            "mission": MissionRecord,
+            "chat_history": ChatHistory,
+        }
+        assert module_config == {"chat_history": ChatHistory}
+
+    def test_module_mission_model_wins(self) -> None:
+        config = ServicesConfig(
+            services_config_params={"storage": {"config": {"mission": ChatHistory}}}, mode=ServicesMode.LOCAL
+        )
+
+        assert config.get_strategy_config("storage")["config"]["mission"] is ChatHistory
+
+
 class TestBorrowedCleanup:
     """ModuleContext.cleanup() skips .close() on borrowed strategies."""
 
@@ -115,8 +144,11 @@ class TestBorrowedCleanup:
         cost = AsyncMock()
 
         ctx = ModuleContext(
-            communication=comm, cost=cost,
-            filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            communication=comm,
+            cost=cost,
+            filesystem=AsyncMock(),
+            identity=AsyncMock(),
+            registry=reg,
             secret=AsyncMock(),
             storage=AsyncMock(),
             user_profile=AsyncMock(),
@@ -142,10 +174,14 @@ class TestBorrowedCleanup:
         reg = AsyncMock()
 
         ctx = ModuleContext(
-            communication=comm, cost=AsyncMock(),
-            filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            communication=comm,
+            cost=AsyncMock(),
+            filesystem=AsyncMock(),
+            identity=AsyncMock(),
+            registry=reg,
             secret=AsyncMock(),
-            storage=AsyncMock(), task_manager=AsyncMock(),
+            storage=AsyncMock(),
+            task_manager=AsyncMock(),
             user_profile=AsyncMock(),
             session={"job_id": "j1", "mission_id": "m1", "setup_id": "s1", "setup_version_id": "v1"},
         )

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 class GetAction(RegistryAction):
     """Fetch one instance by id, with its current version content, status and visibility."""
 
+    display_name = "Get"
     action: Literal["get"] = "get"
     setup_id: str = Field(..., description="The setup id to fetch.")
 
@@ -60,6 +61,7 @@ class SearchAction(RegistryAction):
     # no longer imposes a tighter one of its own.
     _MAX_RESULTS: ClassVar[int] = 100
 
+    display_name = "Search"
     action: Literal["search"] = "search"
     query: str = Field(default="", description="Free text matched against name and documentation.")
     setup_ids: list[str] | None = Field(
@@ -107,8 +109,7 @@ class SearchAction(RegistryAction):
             ValueError: If the filter holds ``unspecified`` or ``validating``.
         """
         if statuses and (RegistrySetupStatus.UNSPECIFIED in statuses or RegistrySetupStatus.VALIDATING in statuses):
-            # TODO(validate): SEARCH-STATUS-FILTER unfilterable statuses are refused before the registry call
-            logger.info("[VALIDATE SEARCH-STATUS-FILTER] unfilterable statuses refused: %s", statuses)
+            logger.info("unfilterable statuses refused: %s", statuses)
             msg = '"unspecified" and "validating" cannot be used as a search status filter'
             raise ValueError(msg)
         return statuses
@@ -181,9 +182,9 @@ class SearchAction(RegistryAction):
         if module_type == RegistryModuleType.SERVICE:
             if not setup.structure:
                 logger.info(
-                    "[VALIDATE STRUCTROW] service row rendered with an empty structure: setup_id=%s",
+                    "service row rendered with an empty structure: setup_id=%s",
                     setup.setup_id,
-                )  # TODO(validate): remove after prod validation
+                )
             row["structure"] = setup.structure
         return row
 
@@ -196,6 +197,7 @@ class UpdateAction(RegistryAction):
     ``list_versions`` to find the id to go back to.
     """
 
+    display_name = "Update"
     action: Literal["update"] = "update"
     writes: ClassVar[bool] = True
     setup_id: str = Field(..., description="The setup id to update.")
@@ -268,6 +270,7 @@ class DeleteAction(RegistryAction):
     removed by anyone.
     """
 
+    display_name = "Delete"
     action: Literal["delete"] = "delete"
     writes: ClassVar[bool] = True
     setup_id: str = Field(..., description="The setup id to delete.")
@@ -290,6 +293,7 @@ class DeleteAction(RegistryAction):
 class ChangeVisibilityAction(RegistryAction):
     """Change who can see and use an instance."""
 
+    display_name = "Change visibility"
     action: Literal["change_visibility"] = "change_visibility"
     writes: ClassVar[bool] = True
     setup_id: str = Field(..., description="The setup id whose visibility to change.")
@@ -325,6 +329,7 @@ class ListVersionsAction(RegistryAction):
 
     _MAX_VERSIONS: ClassVar[int] = 100
 
+    display_name = "List versions"
     action: Literal["list_versions"] = "list_versions"
     setup_id: str = Field(..., description="The setup id whose version history to list.")
     limit: int = Field(
@@ -378,6 +383,7 @@ class SetVersionAction(RegistryAction):
     either way.
     """
 
+    display_name = "Set version"
     action: Literal["set_version"] = "set_version"
     # Marks the call as state-mutating so the dispatcher invalidates the servicer's setup cache.
     # Without it the rollback would commit while running jobs kept resolving the version this

@@ -271,3 +271,35 @@ class TestServerConfigSubclasses:
         expected_database_url = "sqlite:///registry.db"
 
         assert config.channel.database_url == expected_database_url
+
+
+class TestServerChannelAdvertiseAddress:
+    """The address a module announces: advertised host/port, else the listening ones."""
+
+    def test_falls_back_to_listening_host_and_port(self) -> None:
+        from digitalkin.models.settings.server.channel import ServerChannelSettings
+
+        channel = ServerChannelSettings(host="0.0.0.0", port=50057)  # noqa: S104
+
+        assert channel.advertise_address == ("0.0.0.0", 50057)  # noqa: S104
+
+    def test_tunnel_host_and_port_are_announced(self) -> None:
+        """Behind a TCP tunnel the public port differs from the one the server binds."""
+        from digitalkin.models.settings.server.channel import ServerChannelSettings
+
+        channel = ServerChannelSettings(
+            host="0.0.0.0",  # noqa: S104
+            port=50057,
+            advertise_host="4.tcp.eu.ngrok.io",
+            advertise_port=15084,
+        )
+
+        assert channel.advertise_address == ("4.tcp.eu.ngrok.io", 15084)
+
+    def test_advertise_port_read_from_env(self, monkeypatch) -> None:  # noqa: ANN001
+        from digitalkin.models.settings.server.channel import ServerChannelSettings
+
+        monkeypatch.setenv("SERVER_CHANNEL_ADVERTISE_PORT", "15084")
+        monkeypatch.setenv("SERVER_CHANNEL_PORT", "50057")
+
+        assert ServerChannelSettings().advertise_address[1] == 15084

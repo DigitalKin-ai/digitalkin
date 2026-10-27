@@ -92,7 +92,7 @@ class TestCite:
 
         assert len(_snapshots(ctx)) == 2
         (message, url, title, _), _ = log.warning.call_args
-        assert message.startswith("[VALIDATE AGUI-SOURCES] dropped")
+        assert message.startswith("dropped source over the per-run cap")
         assert (url, title) == ("https://a.io/2", "t2")
 
     async def test_overlong_text_is_truncated(self) -> None:

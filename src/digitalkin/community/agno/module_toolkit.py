@@ -24,7 +24,7 @@ from digitalkin.community.agno.models import ToolCallMetadata, ToolOutputMetadat
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
-from digitalkin.models.events import SourceCitation
+from digitalkin.models.events import SourceCitation, ToolInfo
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
@@ -127,19 +127,12 @@ class ModuleToolkit(DkToolkit):
             agno_functions.append(
                 Function(
                     name=wrapper.__name__,
+                    title=tool_def.display_name or ToolInfo.humanize(tool_def.name),
                     description=tool_def.description or f"Execute the {tool_def.name} tool.",
                     parameters=tool_def.parameters_schema,
                     entrypoint=wrapper,
                     skip_entrypoint_processing=True,
                 )
-            )
-            logger.info(
-                "[lat-audit] tool_wrapped: setup_id='%s' fn_name='%s' param_count=%d param_names=%s desc_chars=%d",
-                tool_module_info.setup_id,
-                wrapper.__name__,
-                tool_def.parameter_count,
-                sorted(tool_def.parameter_names),
-                len(tool_def.description or ""),
             )
 
         if not agno_functions:
@@ -160,21 +153,17 @@ class ModuleToolkit(DkToolkit):
                 len(tool_functions),
             )
 
-        logger.info(
-            "[lat-audit] toolkit_built: setup_id='%s' slug='%s' sdk_tools=%d wrapped=%d empty=%s",
-            tool_module_info.setup_id,
-            tool_module_info.slug,
-            len(tool_module_info.tools),
-            len(agno_functions),
-            not agno_functions,
-        )
-
         toolkit_name = (
             tool_module_info.tool_name
             or tool_module_info.module_name
             or tool_module_info.slug.replace(":", "_").replace(".", "_")
         )
-        super().__init__(name=f"{toolkit_name}_toolkit", tools=agno_functions, context=self._context)
+        super().__init__(
+            name=f"{toolkit_name}_toolkit",
+            tools=agno_functions,
+            context=self._context,
+            display_name=tool_module_info.tool_name,
+        )
 
     @property
     def module_id(self) -> str:
@@ -577,7 +566,7 @@ class ModuleToolkit(DkToolkit):
             )
 
             try:
-                successful_resp, error_frame, frames = await asyncio.wait_for(
+                successful_resp, error_frame, _frames = await asyncio.wait_for(
                     ModuleToolkit._drain(context, fn(**kwargs)),
                     timeout=timeout,
                 )
@@ -598,16 +587,6 @@ class ModuleToolkit(DkToolkit):
             else:
                 call_timer.mark("gen_consume")
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                # TODO(validate): TOOL-LAST-FRAME tool calls buffer only the last success/error frame
-                logger.info(
-                    "[VALIDATE TOOL-LAST-FRAME] tool '%s' drained %d frames, kept success=%s error=%s "
-                    "(input_kwargs not echoed)",
-                    tool_name,
-                    frames,
-                    successful_resp is not None,
-                    error_frame is not None,
-                    extra={"task_id": task_id, "setup_id": setup_id},
-                )
                 if successful_resp:
                     return handle_success(tool_name, successful_resp, duration_ms)
 

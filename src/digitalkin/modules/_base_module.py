@@ -633,9 +633,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
-            # TODO(validate): MODULE-FAILED-EOS a failed module still writes stream.end instead of idling out
             logger.info(
-                "[VALIDATE MODULE-FAILED-EOS] module %s failed; stop() still writes stream.end",
+                "module %s failed; stop() still writes stream.end",
                 self.name,
                 extra=self.context.session.current_ids(),
             )
@@ -648,9 +647,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                     )
                 )
                 if self.context.agui_run is not None:
-                    # TODO(validate): AGUI-ERROR-REDACTED RUN_ERROR carries no exception text (detail logged above)
                     logger.info(
-                        "[VALIDATE AGUI-ERROR-REDACTED] RUN_ERROR sent without %s detail",
+                        "RUN_ERROR sent without %s detail",
                         type(e).__name__,
                         extra=self.context.session.current_ids(),
                     )
@@ -821,14 +819,12 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
-            t2 = time.perf_counter_ns()
             if "send_message" in vars(self.context.callbacks):
                 if cancel_reason is not None:
                     if self.context.agui_run is not None:
                         await self.context.agui_run.fail(self.context, "cancelled", cancel_reason, "cancelled")
-                    # TODO(validate): CANCEL-SENTINEL stream.cancelled is emitted before stream.end on cancel
                     logger.info(
-                        "[VALIDATE CANCEL-SENTINEL] emitting stream.cancelled reason=%s before stream.end",
+                        "emitting stream.cancelled reason=%s before stream.end",
                         cancel_reason,
                         extra=self.context.session.current_ids(),
                     )
@@ -846,20 +842,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                 )
             else:
                 logger.debug("send_message not registered; skipping end-of-stream (config-setup path)")
-            t3 = time.perf_counter_ns()
             self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPED
-            ids = self.context.session.current_ids()
-            logger.info(
-                "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
-                "total=%.2fms t_done_ns=%d task_id=%s mission_id=%s",
-                cleanup_ms,
-                (t2 - t1) / 1e6,
-                (t3 - t2) / 1e6,
-                (t3 - t0) / 1e6,
-                t3,
-                ids.get("job_id", ""),
-                ids.get("mission_id", ""),
-            )
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module", extra=self.context.session.current_ids())
@@ -915,7 +898,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             # Without a reply the servicer waits out the whole config-setup timeout.
             await callback(ModuleCodeModel(code="INTERNAL", message=f"config setup failed: {e}"))
             logger.info(
-                "[VALIDATE CFGFAIL] config setup failure reported to the caller: %s",
+                "config setup failure reported to the caller: %s",
                 e,
                 extra=self.context.session.current_ids(),
-            )  # TODO(validate): remove after prod validation
+            )

@@ -59,8 +59,7 @@ class ModuleServer(BaseServer):
         if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
             super().__init__(interceptors=[ValidationServerInterceptor(), *(interceptors or ())])
         else:
-            # TODO(validate): SYNC-NO-VALIDATION a sync server starts without the async validation interceptor
-            logger.warning("[VALIDATE SYNC-NO-VALIDATION] sync server: buf.validate request checks disabled")
+            logger.warning("sync server: buf.validate request checks disabled")
             super().__init__(interceptors=interceptors)
         self.module_class = module_class
         if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
@@ -257,12 +256,12 @@ class ModuleServer(BaseServer):
             )
             raise RuntimeError(msg)
 
-        advertise_address = get_server_settings().channel.advertise_host or get_server_settings().channel.host
+        advertise_address, advertise_port = get_server_settings().channel.advertise_address
 
         logger.info(
             "Registering module with registry at %s:%d version=%s module_id=%s",
             advertise_address,
-            get_server_settings().channel.port,
+            advertise_port,
             version,
             module_id,
         )
@@ -270,7 +269,7 @@ class ModuleServer(BaseServer):
         result = await self.registry.register(
             module_id=module_id,
             address=advertise_address,
-            port=get_server_settings().channel.port,
+            port=advertise_port,
             version=version,
             module_type=self.module_class.registry_type,
             documentation=self.module_class.build_registry_documentation(),
@@ -284,7 +283,7 @@ class ModuleServer(BaseServer):
         logger.info(
             "Module registered successfully at %s:%d module_id=%s",
             advertise_address,
-            get_server_settings().channel.port,
+            advertise_port,
             result.module_id,
         )
 
@@ -335,9 +334,8 @@ class ModuleServer(BaseServer):
         await self._stop_async(grace)
 
         if self.module_servicer is not None:
-            # TODO(validate): SHUTDOWN-ORDER the gRPC server stops before running tasks are cancelled
             logger.info(
-                "[VALIDATE SHUTDOWN-ORDER] server stopped; cancelling %d running tasks",
+                "server stopped; cancelling %d running tasks",
                 len(self.module_servicer.job_manager.tasks),
             )
             try:

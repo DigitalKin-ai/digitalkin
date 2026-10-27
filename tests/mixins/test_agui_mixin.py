@@ -25,6 +25,7 @@ from digitalkin.mixins.agui_mixin import AgUiMixin
 from digitalkin.models.events import (
     AgentRunEvent,
     CustomEvent,
+    ModelInfo,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -64,6 +65,7 @@ def _make_context() -> MagicMock:
     ctx.callbacks.logger = MagicMock()
     ctx.session = MagicMock()
     ctx.session.current_ids = MagicMock(return_value={})
+    ctx.storage.read = AsyncMock(return_value=None)
     ctx.agui_run = None
     return ctx
 
@@ -383,6 +385,125 @@ class TestAgUi10ProducerConformance:
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
         assert wire["protocolVersion"] == PROTOCOL_VERSION == "1.0"
 
+    async def test_tool_call_start_carries_display_names_in_metadata(self) -> None:
+        """TOOL_CALL_START keeps toolCallName technical and puts both labels in metadata, not at the root."""
+        ctx = _make_context()
+        tool = ToolInfo(
+            tool_call_id="c1",
+            tool_name="services_manager",
+            tool_display_name="Services",
+            function_display_name="Create",
+        )
+        await AgUiMixin()._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool)
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["type"] == "TOOL_CALL_START"
+        assert wire["toolCallName"] == "services_manager"
+        assert wire["metadata"] == {"toolDisplayName": "Services", "functionDisplayName": "Create"}
+        assert "toolDisplayName" not in wire
+        assert "functionDisplayName" not in wire
+
+    async def test_tool_call_start_labels_sit_beside_digitalkin_metadata(self) -> None:
+        """The labels are merged into metadata without dropping the ``digitalkin`` author block."""
+        ctx = _make_context()
+        tool = ToolInfo(
+            tool_call_id="c1", tool_name="tools_manager", tool_display_name="Tools", function_display_name="Search"
+        )
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool, metadata={"name": "ArchetypeAda"}),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {
+            "digitalkin": {"name": "ArchetypeAda"},
+            "toolDisplayName": "Tools",
+            "functionDisplayName": "Search",
+        }
+
+    async def test_tool_call_start_without_function_label_omits_it(self) -> None:
+        """A single-function tool sends its tool label; the absent function label is not in metadata."""
+        ctx = _make_context()
+        tool = ToolInfo(tool_call_id="c1", tool_name="ask_form", tool_display_name="Ask form")
+        await AgUiMixin()._handle_tool_call_started(
+            ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool)
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["toolCallName"] == "ask_form"
+        assert wire["metadata"] == {"toolDisplayName": "Ask form"}
+
+    async def test_tool_call_start_without_labels_has_no_metadata(self) -> None:
+        """No label and no author metadata: the event carries no ``metadata`` at all."""
+        ctx = _make_context()
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(
+                event=AgentRunEvent.TOOL_CALL_STARTED, tool=ToolInfo(tool_call_id="c1", tool_name="frontend_tool")
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert "metadata" not in wire
+
+    async def test_tool_call_start_carries_the_model_beside_its_labels(self) -> None:
+        """The model that decided the call rides in metadata with the tool labels."""
+        ctx = _make_context()
+        tool = ToolInfo(tool_call_id="c1", tool_name="ask_form", tool_display_name="Ask form")
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(
+                event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool, model=ModelInfo(name="claude-opus-4-5")
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {"toolDisplayName": "Ask form", "model": "claude-opus-4-5"}
+
+    async def test_text_message_start_after_fallback_names_both_models(self) -> None:
+        """``requestedModel`` is only sent when a fallback replaced the requested model."""
+        ctx = _make_context()
+        await AgUiMixin()._handle_text_message_started(
+            ctx,
+            TextMessageStartedEvent(
+                event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                message_id="m1",
+                metadata={"name": "ArchetypeAda"},
+                model=ModelInfo(name="claude-sonnet-4.5", requested_name="claude-opus-4-5"),
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {
+            "digitalkin": {"name": "ArchetypeAda"},
+            "model": "claude-sonnet-4.5",
+            "requestedModel": "claude-opus-4-5",
+        }
+
+    async def test_reasoning_start_events_carry_the_model(self) -> None:
+        ctx = _make_context()
+        await AgUiMixin()._handle_reasoning_started(
+            ctx,
+            ReasoningStartedEvent(
+                event=AgentRunEvent.REASONING_STARTED, reasoning_id="r1", model=ModelInfo(name="claude-opus-4-5")
+            ),
+        )
+
+        wires = [c.args[0].model_dump(mode="json")["root"]["event"] for c in ctx.callbacks.send_message.await_args_list]
+        assert [w["type"] for w in wires] == ["REASONING_START", "REASONING_MESSAGE_START"]
+        assert all(w["metadata"] == {"model": "claude-opus-4-5"} for w in wires)
+
+    async def test_text_message_start_without_model_has_no_model_key(self) -> None:
+        ctx = _make_context()
+        await AgUiMixin()._handle_text_message_started(
+            ctx, TextMessageStartedEvent(event=AgentRunEvent.TEXT_MESSAGE_STARTED, message_id="m1")
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert "metadata" not in wire
+
     @pytest.mark.parametrize(
         "event",
         [
@@ -411,7 +532,7 @@ class TestAgUi10ProducerConformance:
 
         ctx.callbacks.send_message.assert_not_awaited()
         (message, kind, dumped), _ = log.warning.call_args
-        assert message.startswith("[VALIDATE AGUI-EMPTY-ID]")
+        assert message.startswith("dropped %s without id")
         assert kind == event.event
         assert dumped == event.model_dump_json(exclude_none=True)
 
@@ -425,14 +546,18 @@ class TestAgUi10ProducerConformance:
 
 
 class TestSubagentOutcome:
-    @pytest.mark.parametrize(("outcome", "wire", "status"), [("suspended", {"type": "suspended"}, "suspended"), (None, None, "completed")])
+    @pytest.mark.parametrize(
+        ("outcome", "wire", "status"), [("suspended", {"type": "suspended"}, "suspended"), (None, None, "completed")]
+    )
     async def test_outcome_reaches_wire_and_state(self, outcome: Any, wire: Any, status: str) -> None:
         from digitalkin.mixins.agui_mixin import AgUiRunState
 
         ctx = _make_context()
         ctx.agui_run = AgUiRunState()
         host = _Host()
-        await host.send_message(ctx, SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a", subagent_run_id="m1"))
+        await host.send_message(
+            ctx, SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a", subagent_run_id="m1")
+        )
         await host.send_message(
             ctx, SubagentFinishedEvent(event=AgentRunEvent.SUBAGENT_FINISHED, subagent_run_id="m1", outcome=outcome)
         )
@@ -453,7 +578,9 @@ class TestSourceCitationRouting:
 
         ctx = _make_context()
         ctx.agui_run = AgUiRunState()
-        await _Host().send_message(ctx, SourceCitationEvent(value=SourceCitation(url="https://a.io/"), subagent_run_id="m1"))
+        await _Host().send_message(
+            ctx, SourceCitationEvent(value=SourceCitation(url="https://a.io/"), subagent_run_id="m1")
+        )
 
         assert ctx.agui_run.sources == {"m1": {"https://a.io/": {"url": "https://a.io/"}}}
 

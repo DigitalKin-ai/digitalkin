@@ -220,9 +220,8 @@ class ToolReference(BaseModel):
                 reason = "all_user_triggers_unknown"
             else:
                 reason = "post_filter_empty"
-            # TODO(validate): TOOL-DROP-ZERO a tool resolving to 0 functions is dropped
             logger.warning(
-                "[VALIDATE TOOL-DROP-ZERO] Tool resolved with 0 functions, dropped: "
+                "Tool resolved with 0 functions, dropped: "
                 "setup_id=%s slug=%s reason=%s user_enabled=%d module_available=%d",
                 entry.setup_id,
                 tool_info.slug,

@@ -67,10 +67,8 @@ class AgUiStreamInput(DataTrigger):
                     part.get("filename"),
                 )
                 if not payload and not url:
-                    # TODO(validate): AGUI-BINARY-UPGRADE id-only binary parts cannot become a 1.0 source
                     logger.warning(
-                        "[VALIDATE AGUI-BINARY-UPGRADE] message %s: binary part dropped, no url or data "
-                        "(id=%s, filename=%s, mime=%s)",
+                        "message %s: binary part dropped, no url or data (id=%s, filename=%s, mime=%s)",
                         message.get("id"),
                         file_id,
                         filename,
@@ -85,10 +83,8 @@ class AgUiStreamInput(DataTrigger):
                     "source": {"type": "data" if payload else "url", "value": payload or url, "mimeType": mime},
                     **({"metadata": metadata} if metadata else {}),
                 })
-                # TODO(validate): AGUI-BINARY-UPGRADE legacy binary parts still sent by pre-1.x fronts
                 logger.info(
-                    "[VALIDATE AGUI-BINARY-UPGRADE] message %s: binary part upgraded to %s (%s source, id=%s, "
-                    "filename=%s, mime=%s)",
+                    "message %s: binary part upgraded to %s (%s source, id=%s, filename=%s, mime=%s)",
                     message.get("id"),
                     parts[-1]["type"],
                     parts[-1]["source"]["type"],

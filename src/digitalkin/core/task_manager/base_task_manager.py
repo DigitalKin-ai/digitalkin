@@ -121,8 +121,7 @@ class BaseTaskManager(ABC):
         except asyncio.CancelledError:
             if body.cancelled():
                 raise
-            # TODO(validate): CLEANUP-SHIELD a cancel during cleanup lets the cleanup finish first
-            logger.warning("[VALIDATE CLEANUP-SHIELD] cancel during cleanup; finishing cleanup first", extra=ids)
+            logger.warning("cancel during cleanup; finishing cleanup first", extra=ids)
             await asyncio.wait({body})
             raise
 

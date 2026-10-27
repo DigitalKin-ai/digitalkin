@@ -24,6 +24,7 @@ nav:
 - Testing: testing.md
 - Changelog:
   - changelog/index.md
+  - 1.0.6: changelog/1.0.6.md
   - 1.0.5: changelog/1.0.5.md
   - 1.0.4: changelog/1.0.4.md
   - 1.0.2: changelog/1.0.2.md

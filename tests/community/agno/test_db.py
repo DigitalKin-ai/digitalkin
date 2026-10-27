@@ -298,7 +298,7 @@ class TestUpsertSession:
         with caplog.at_level(logging.INFO, logger="digitalkin"):
             await db.upsert_session(self._session_object(self._tool_runs(["x" * 10 + "y" * 500] * 6)))
 
-        logged = [record.getMessage() for record in caplog.records if "TOOL-RESULT-RETRUNCATE" in record.getMessage()]
+        logged = [record.getMessage() for record in caplog.records if "old tool result" in record.getMessage()]
         assert logged
         assert all(message.endswith("y" * 100) and "y" * 101 not in message for message in logged)
 
