@@ -88,7 +88,7 @@ class SearchIn(DataTrigger):
 
 - Mandatory on `ToolModule`: defining a tool module whose `input_format` has a trigger without `display_name` raises `TypeError` naming the protocol. SDK utility protocols (`healthcheck_*`) are exempt; `ArchetypeModule` is not checked.
 - `display_name` is a class variable: it is published on the trigger's schema definition, never in `properties`, so the LLM never sees it.
-- The tool's own label is its registry setup name. The front receives both as `toolDisplayName` / `functionDisplayName` (see [agui_events.md](agui_events.md#tool-calls)).
+- The tool's own label is its registry setup name. The front receives both as `metadata.toolDisplayName` / `metadata.functionDisplayName` on `TOOL_CALL_START` (see [agui_events.md](agui_events.md#tool-calls)).
 - Upgrading a tool repo to this SDK version: add `display_name` to every trigger of its input union, or the module fails at import.
 
 Emit outputs with the context callback, as many times as needed:

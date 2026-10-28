@@ -384,8 +384,8 @@ class TestAgUi10ProducerConformance:
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
         assert wire["protocolVersion"] == PROTOCOL_VERSION == "1.0"
 
-    async def test_tool_call_start_carries_display_names_at_root(self) -> None:
-        """TOOL_CALL_START keeps toolCallName technical and adds both labels at the event root."""
+    async def test_tool_call_start_carries_display_names_in_metadata(self) -> None:
+        """TOOL_CALL_START keeps toolCallName technical and puts both labels in metadata, not at the root."""
         ctx = _make_context()
         tool = ToolInfo(
             tool_call_id="c1", tool_name="services_manager", tool_display_name="Services", function_display_name="Create"
@@ -396,14 +396,31 @@ class TestAgUi10ProducerConformance:
 
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
         assert wire["type"] == "TOOL_CALL_START"
-        assert (wire["toolCallName"], wire["toolDisplayName"], wire["functionDisplayName"]) == (
-            "services_manager",
-            "Services",
-            "Create",
+        assert wire["toolCallName"] == "services_manager"
+        assert wire["metadata"] == {"toolDisplayName": "Services", "functionDisplayName": "Create"}
+        assert "toolDisplayName" not in wire
+        assert "functionDisplayName" not in wire
+
+    async def test_tool_call_start_labels_sit_beside_digitalkin_metadata(self) -> None:
+        """The labels are merged into metadata without dropping the ``digitalkin`` author block."""
+        ctx = _make_context()
+        tool = ToolInfo(
+            tool_call_id="c1", tool_name="tools_manager", tool_display_name="Tools", function_display_name="Search"
+        )
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool, metadata={"name": "ArchetypeAda"}),
         )
 
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {
+            "digitalkin": {"name": "ArchetypeAda"},
+            "toolDisplayName": "Tools",
+            "functionDisplayName": "Search",
+        }
+
     async def test_tool_call_start_without_function_label_omits_it(self) -> None:
-        """A single-function tool sends its tool label; the absent function label is not on the wire."""
+        """A single-function tool sends its tool label; the absent function label is not in metadata."""
         ctx = _make_context()
         tool = ToolInfo(tool_call_id="c1", tool_name="ask_form", tool_display_name="Ask form")
         await AgUiMixin()._handle_tool_call_started(
@@ -411,8 +428,21 @@ class TestAgUi10ProducerConformance:
         )
 
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
-        assert (wire["toolCallName"], wire["toolDisplayName"]) == ("ask_form", "Ask form")
-        assert "functionDisplayName" not in wire
+        assert wire["toolCallName"] == "ask_form"
+        assert wire["metadata"] == {"toolDisplayName": "Ask form"}
+
+    async def test_tool_call_start_without_labels_has_no_metadata(self) -> None:
+        """No label and no author metadata: the event carries no ``metadata`` at all."""
+        ctx = _make_context()
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(
+                event=AgentRunEvent.TOOL_CALL_STARTED, tool=ToolInfo(tool_call_id="c1", tool_name="frontend_tool")
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert "metadata" not in wire
 
     @pytest.mark.parametrize(
         "event",

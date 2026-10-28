@@ -258,10 +258,15 @@ class TestStreamInvariants:
         assert kinds[0] == "RUN_STARTED"
         assert kinds[-1] == "RUN_FINISHED"
         # A1: the client merges metadata onto messages and sends it back in RunAgentInput, so only
-        # identity keys may ever be written there (no prompt, token or secret).
+        # identity keys and tool-call labels may ever be written there (no prompt, token or secret).
         written = {key for e in events for key in e.get("metadata", {}).get("digitalkin", {})}
         assert written <= {"source", "name", "id", "parent_run_id"}
-        assert all(set(e.get("metadata", {})) <= {"digitalkin"} for e in events)
+        labels = {"toolDisplayName", "functionDisplayName"}
+        assert all(
+            set(e.get("metadata", {}))
+            <= ({"digitalkin"} | labels if e["type"] == "TOOL_CALL_START" else {"digitalkin"})
+            for e in events
+        )
         activities = [e for e in events if e["type"] == "ACTIVITY_SNAPSHOT"]
         assert [(a.get("subagentRunId"), len(a["content"]["sources"])) for a in activities] == [(None, 1), ("m1", 1)]
 

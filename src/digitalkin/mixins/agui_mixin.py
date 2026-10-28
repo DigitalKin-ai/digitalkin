@@ -693,8 +693,9 @@ class AgUiMixin:
             self._unidentified(context, event)
             return
 
-        # ag_ui extras keep their key as-is (no alias generation); optional fields stay absent.
-        labels: dict[str, Any] = {
+        # Labels ride in metadata beside the ``digitalkin`` key; absent labels stay absent.
+        authored = self._authored(event)
+        labels = {
             key: label
             for key, label in (
                 ("toolDisplayName", tool.tool_display_name),
@@ -702,12 +703,13 @@ class AgUiMixin:
             )
             if label is not None
         }
+        if labels:
+            authored.setdefault("metadata", {}).update(labels)
         start_output = AgUiToolCallStartOutput(
             event=AgUiToolCallStartEvent(
                 tool_call_id=tool_call_id,
                 tool_call_name=tool.tool_name,
-                **labels,
-                **self._authored(event),
+                **authored,
             )
         )
         await self._send_agui(context, start_output)
