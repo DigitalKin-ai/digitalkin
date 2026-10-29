@@ -50,6 +50,7 @@ class ServicesManager(RegistryObjectToolKit):
                 "each key is for — it is how other agents find their way around the configuration."
             ),
             entrypoint=self.services_manager,
+            display_name="Services Manager",
         )
 
     async def services_manager(self, action: ServiceActions | None = None, **fields: Any) -> str:

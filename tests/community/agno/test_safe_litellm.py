@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 
 import litellm
@@ -87,7 +87,7 @@ class TestSafeLiteLLMFormatMessages:
 
         tool_msgs = [m for m in formatted if m["role"] == "tool"]
         assert len(tool_msgs) == 1
-        assert tool_msgs[0]["content"] == ""
+        assert tool_msgs[0]["content"] == ""  # ruff: ignore[compare-to-empty-string] - "" exactly, not None
         assert tool_msgs[0]["tool_call_id"] == "call_1"
 
     def test_stock_litellm_emits_empty_content_for_tool_call_turns(self) -> None:
@@ -95,7 +95,7 @@ class TestSafeLiteLLMFormatMessages:
         formatted = _stock_model()._format_messages(_conversation())
 
         tool_call_msgs = [m for m in formatted if m["role"] == "assistant" and m.get("tool_calls")]
-        assert tool_call_msgs[0]["content"] == ""
+        assert tool_call_msgs[0]["content"] == ""  # ruff: ignore[compare-to-empty-string] - "" exactly, not None
 
 
 class TestStripEmptyContentListBlocks:
@@ -170,7 +170,7 @@ class TestTemperatureGate:
 
     def test_request_keeps_temperature_by_default(self) -> None:
         model = SafeLiteLLM(id="gpt-5", temperature=0.3)
-        assert model.get_request_params()["temperature"] == 0.3
+        assert model.get_request_params()["temperature"] == pytest.approx(0.3)
 
 
 CACHE = {"type": "ephemeral"}
@@ -261,7 +261,9 @@ class TestContextWindowTrim:
     def tiny_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import litellm
 
-        spec = {**litellm.model_cost["claude-sonnet-4-6"], "max_input_tokens": 400}
+        # litellm's trimmer reads ``max_tokens`` even when ``max_input_tokens`` is set, and the cost
+        # map it downloads at import may lack the key: pin both so the test owns the window.
+        spec = {**litellm.model_cost.get("claude-sonnet-4-6", {}), "max_input_tokens": 400, "max_tokens": 400}
         monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", spec)
 
     @staticmethod
@@ -427,7 +429,7 @@ class _FakeClient:
         if not kwargs.get("stream"):
             return reply
 
-        async def stream() -> AsyncIterator[object]:
+        async def stream() -> AsyncIterator[object]:  # ruff: ignore[unused-async] - an async generator
             for chunk in reply:  # type: ignore[attr-defined]
                 yield chunk
 
@@ -782,16 +784,16 @@ class TestImageRejectionFallback:
         class _MidStreamFailure:
             """Yields one chunk, then fails like a rejection would."""
 
-            def __iter__(self):
+            def __iter__(self) -> Iterator[object]:
                 yield from _chunks("Partial")
                 raise _image_rejection()
 
         client = _FakeClient(_MidStreamFailure())
         received: list[str] = []
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(litellm.BadRequestError):  # ruff: ignore[pytest-raises-with-multiple-statements]
             async for chunk in _model_with(client).ainvoke_stream(_media_turn(), Message(role="assistant")):
-                received.append(chunk.content or "")
+                received.append(chunk.content or "")  # ruff: ignore[manual-list-comprehension] - keep chunks seen before the error
         assert received == ["Partial"]
         assert len(client.requests) == 1
 

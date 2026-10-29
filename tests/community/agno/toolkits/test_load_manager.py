@@ -167,3 +167,13 @@ def test_bind_tools_stores_the_live_list() -> None:
     loader = _loader()
     loader.bind_tools(tools)
     assert loader._base_tools is tools
+
+
+@pytest.mark.parametrize("args", [{"action": {"action": "tool", "setup_id": "s1"}}, {"action": '{"action": "tool"}'}])
+def test_display_labels(args: dict[str, Any]) -> None:
+    assert LoadManager().display_labels("load_manager", args) == ("Load Manager", "Load tool")
+
+
+def test_display_labels_without_action() -> None:
+    assert LoadManager().display_labels("load_manager", {}) == ("Load Manager", None)
+    assert LoadToolAction.display_name == "Load tool"

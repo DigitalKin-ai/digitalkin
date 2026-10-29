@@ -1,16 +1,22 @@
 """Tests for ToolCache functionality."""
 
+import json
+from typing import Literal
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ConfigDict, TypeAdapter
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
+from digitalkin.grpc_servers.utils.utility_schema_extender import UtilitySchemaExtender
+from digitalkin.models.module.base_types import DataModel, DataTrigger
 from digitalkin.models.module.module_context import ModuleContext, Session
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection
 from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
+from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
 @pytest.fixture
@@ -668,3 +674,53 @@ class TestToolCacheCollision:
 
         assert cache.get("setup-123") == sample_tool_module_info
         assert len(cache.entries) == 1
+
+
+class _SearchTrigger(DataTrigger):
+    """Search the documents."""
+
+    display_name = "Search documents"
+    model_config = ConfigDict(json_schema_extra={"ui:order": ["q"]})
+    protocol: Literal["search"] = "search"
+    q: str
+
+
+class _ListTrigger(DataTrigger):
+    """List the files."""
+
+    protocol: Literal["list_files"] = "list_files"
+
+
+class _LabelledInput(DataModel[_SearchTrigger | _ListTrigger]):
+    """Input union of the display_name tests."""
+
+
+class TestTriggerDisplayName:
+    """Trigger display_name travels through the schema into ToolDefinition."""
+
+    def test_display_name_is_published_in_defs(self) -> None:
+        """A declared label sits on the trigger's $defs entry, never in its properties."""
+        schema = TypeAdapter(_SearchTrigger | _ListTrigger).json_schema()
+
+        assert schema["$defs"]["_SearchTrigger"]["display_name"] == "Search documents"
+        assert schema["$defs"]["_SearchTrigger"]["ui:order"] == ["q"]
+        assert "display_name" not in schema["$defs"]["_ListTrigger"]
+        assert "display_name" not in schema["$defs"]["_SearchTrigger"]["properties"]
+
+    def test_extract_reads_display_name(self) -> None:
+        """Extraction copies the label and keeps it out of the LLM parameters."""
+        schema = TypeAdapter(_SearchTrigger | _ListTrigger).json_schema()
+        tools = {t.name: t for t in ToolModuleInfo.extract_tools_from_schema(schema)}
+
+        assert tools["search"].display_name == "Search documents"
+        assert tools["list_files"].display_name is None
+        assert "display_name" not in json.dumps(tools["search"].parameters_schema)
+
+    def test_display_name_survives_llm_format(self) -> None:
+        """The label survives the utility extension and the json/ui schema split."""
+        extended = UtilitySchemaExtender.create_extended_input_model(_LabelledInput)
+        json_schema, _ = SchemaSplitter.split(extended.model_json_schema())
+        tools = {t.name: t for t in ToolModuleInfo.extract_tools_from_schema(json_schema)}
+
+        assert tools["search"].display_name == "Search documents"
+        assert tools["list_files"].display_name is None

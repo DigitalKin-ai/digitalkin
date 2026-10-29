@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.services.storage import MissionRecord
 from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
@@ -80,6 +81,11 @@ class ServicesConfig(BaseModel):
             override = services_config_strategies.get(name)
             self._strategies[name] = override if override is not None else defaults[name]
             self._configs[name] = services_config_params.get(name) or {}
+
+        # The SDK-owned `mission` collection (AG-UI mission title) is registered on every
+        # module; a module's own entry wins. A new dict, the module's class attribute is shared.
+        storage = self._configs["storage"]
+        self._configs["storage"] = {**storage, "config": {"mission": MissionRecord, **(storage.get("config") or {})}}
 
         # The secret service is backed by the UserProfileService — reuse the
         # user_profile client_config (same host/port) when no dedicated secret

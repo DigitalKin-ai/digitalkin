@@ -66,6 +66,7 @@ class ChatHistoryTools(DkToolkit):
             name="chat_history_tools",
             tools=[self.outline_chat_history, self.read_chat_messages],
             context=context,
+            display_name="Chat history",
         )
         self._session_id = session_id
         # Late-bound to the runtime Agent (single mode) or Team (team mode).

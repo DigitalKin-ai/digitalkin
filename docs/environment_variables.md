@@ -62,31 +62,31 @@ when a single service must reach a different host.
 description; `.env.minimum` lists the ones a deployment must set. Both are
 generated from the classes below.
 
-| Prefix                                                         | Settings class                                         | Configures                                                |
-|----------------------------------------------------------------|--------------------------------------------------------|-----------------------------------------------------------|
-| `SERVER_`                                                      | `ServerSettings`                                       | module gRPC server: concurrency, workers, reflection, health check |
-| `SERVER_CHANNEL_`                                              | `ServerChannelSettings`                                | listen address, security, advertised host                 |
-| `SERVER_GRPC_`                                                 | `GrpcServerSettings`                                   | compression and `SERVER_GRPC_OPTIONS_*` channel options   |
-| `CLIENT_`                                                      | `ClientSettings`                                       | unary query retries, backoff and deadline                 |
-| `CLIENT_CHANNEL_`                                              | `ClientChannelSettings`                                | services-provider address and security                    |
-| `CLIENT_GRPC_`                                                 | `GrpcClientSettings`                                   | compression and `CLIENT_GRPC_OPTIONS_*` channel options   |
-| `CLIENT_GRPC_RETRY_`                                           | `GrpcClientRetrySettings`                              | channel-level retry policy                                |
-| `CLIENT_CIRCUIT_BREAKER_`                                      | `CircuitBreakerSettings`                               | per-service circuit breaker                               |
-| `CERTIFICATE_`                                                 | `CertificateSettings`                                  | certificate volumes                                       |
-| `SERVICE_MODE`, `DIGITALKIN_MODULE_`                           | `ModuleSettings`                                       | services mode, module id, timezone, tool resolution       |
-| `DIGITALKIN_MODULE_SERVICER_`                                  | `ModuleServicerSettings`                               | per-setup-version cache size and TTL                      |
-| `DIGITALKIN_REDIS_`                                            | `RedisSettings`, `RedisPoolSettings`                   | Redis URL, pools and TTLs                                 |
-| `DIGITALKIN_SIGNAL_`                                           | `RedisSignalSettings`                                  | signal delivery                                           |
-| `DIGITALKIN_GATEWAY_`                                          | `GatewaySettings` and its nested classes               | streams, dial-back, queues                                |
-| `DIGITALKIN_M2M_`                                              | `GatewayM2MSettings`                                   | module-to-module calls                                    |
-| `DIGITALKIN_TASK_MANAGER_`, `DIGITALKIN_JOB_MANAGER_`          | `TaskManagerSettings`, `JobManagerSettings`            | admission, concurrency, backpressure                      |
-| `DIGITALKIN_BULKHEAD_`                                         | `BulkheadSettings`, `BulkheadServiceSettings`          | per-service concurrency limits                            |
-| `DIGITALKIN_LOG_`, `DIGITALKIN_QUEUE_`, `DIGITALKIN_REGISTRY_` | `LoggingSettings`, `QueueSettings`, `RegistrySettings` | logging, queue sizes, registry search                     |
-| `DIGITALKIN_AGUI_`                                             | `AgUiSettings`                                         | AG-UI sources caps, inline attachment size                |
-| `LITELLM_`                                                     | `LiteLLMSettings`                                      | LiteLLM proxy URL and token (`litellm` extra)             |
-| `LANGFUSE_`                                                    | `LangfuseSettings`                                     | Langfuse keys, URL, environment (`langfuse` extra)        |
-| `DIGITALKIN_COMPACTION_`                                       | `CompactionSettings`                                   | history compaction threshold and summary model (`agno` extra) |
-| `DIGITALKIN_`                                                  | `ProfilingSettings`                                    | profiler, uvloop                                          |
+| Prefix                                                         | Settings class                                         | Configures                                                                     |
+|----------------------------------------------------------------|--------------------------------------------------------|--------------------------------------------------------------------------------|
+| `SERVER_`                                                      | `ServerSettings`                                       | module gRPC server: concurrency, workers, reflection, health check             |
+| `SERVER_CHANNEL_`                                              | `ServerChannelSettings`                                | listen address, security, advertised host                                      |
+| `SERVER_GRPC_`                                                 | `GrpcServerSettings`                                   | compression and `SERVER_GRPC_OPTIONS_*` channel options                        |
+| `CLIENT_`                                                      | `ClientSettings`                                       | unary query retries, backoff and deadline                                      |
+| `CLIENT_CHANNEL_`                                              | `ClientChannelSettings`                                | services-provider address and security                                         |
+| `CLIENT_GRPC_`                                                 | `GrpcClientSettings`                                   | compression and `CLIENT_GRPC_OPTIONS_*` channel options                        |
+| `CLIENT_GRPC_RETRY_`                                           | `GrpcClientRetrySettings`                              | channel-level retry policy                                                     |
+| `CLIENT_CIRCUIT_BREAKER_`                                      | `CircuitBreakerSettings`                               | per-service circuit breaker                                                    |
+| `CERTIFICATE_`                                                 | `CertificateSettings`                                  | certificate volumes                                                            |
+| `SERVICE_MODE`, `DIGITALKIN_MODULE_`                           | `ModuleSettings`                                       | services mode, module id, timezone, tool resolution                            |
+| `DIGITALKIN_MODULE_SERVICER_`                                  | `ModuleServicerSettings`                               | per-setup-version cache size and TTL                                           |
+| `DIGITALKIN_REDIS_`                                            | `RedisSettings`, `RedisPoolSettings`                   | Redis URL, pools and TTLs                                                      |
+| `DIGITALKIN_SIGNAL_`                                           | `RedisSignalSettings`                                  | signal delivery                                                                |
+| `DIGITALKIN_GATEWAY_`                                          | `GatewaySettings` and its nested classes               | streams, dial-back, queues                                                     |
+| `DIGITALKIN_M2M_`                                              | `GatewayM2MSettings`                                   | module-to-module calls                                                         |
+| `DIGITALKIN_TASK_MANAGER_`, `DIGITALKIN_JOB_MANAGER_`          | `TaskManagerSettings`, `JobManagerSettings`            | admission, concurrency, backpressure                                           |
+| `DIGITALKIN_BULKHEAD_`                                         | `BulkheadSettings`, `BulkheadServiceSettings`          | per-service concurrency limits                                                 |
+| `DIGITALKIN_LOG_`, `DIGITALKIN_QUEUE_`, `DIGITALKIN_REGISTRY_` | `LoggingSettings`, `QueueSettings`, `RegistrySettings` | logging, queue sizes, registry search                                          |
+| `DIGITALKIN_AGUI_`                                             | `AgUiSettings`                                         | AG-UI sources caps, inline attachment size, mission title attempts and timeout |
+| `LITELLM_`                                                     | `LiteLLMSettings`                                      | LiteLLM proxy URL and token (`litellm` extra)                                  |
+| `LANGFUSE_`                                                    | `LangfuseSettings`                                     | Langfuse keys, URL, environment (`langfuse` extra)                             |
+| `DIGITALKIN_COMPACTION_`                                       | `CompactionSettings`                                   | history compaction threshold and summary model (`agno` extra)                  |
+| `DIGITALKIN_`                                                  | `ProfilingSettings`                                    | profiler, uvloop                                                               |
 
 ## Adding variables to a module
 

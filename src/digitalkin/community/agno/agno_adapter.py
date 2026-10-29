@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from agno.run.team import ToolCallErrorEvent as _TeamToolCallError
     from agno.run.team import ToolCallStartedEvent as _TeamToolCallStarted
 
+    from digitalkin.community.agno.toolkits.base import DkToolkit
+
     AgnoRunEvent: TypeAlias = _AgentBase | _TeamBase
     AgnoRunStartedEvent: TypeAlias = _AgentRunStarted | _TeamRunStarted
     AgnoRunContentEvent: TypeAlias = _AgentRunContent | _TeamRunContent
@@ -57,6 +59,8 @@ from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
     CustomEvent,
+    MissionTitle,
+    MissionTitleEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -90,8 +94,13 @@ class AgnoStreamAdapter:
     top-level ``run_started``, so it must not be shared across concurrent streams.
     """
 
-    def __init__(self) -> None:
-        """Initialize the AgnoStreamAdapter."""
+    def __init__(self, toolkits: dict[str, DkToolkit] | None = None) -> None:
+        """Initialize the AgnoStreamAdapter.
+
+        Args:
+            toolkits: Function name -> owning toolkit, used to label tool calls for users.
+        """
+        self._toolkits = toolkits or {}
         # Text and reasoning sequences are tracked per run, not globally. Agno drains parallel
         # member runs through one shared asyncio.Queue, so two members streaming at once
         # interleave their deltas on the wire; a single message slot would splice both speakers
@@ -623,39 +632,36 @@ class AgnoStreamAdapter:
 
     # ── Tool Call Handlers ──────────────────────────────────────────────
 
-    @staticmethod
-    def _display_tool_name(tool: Any) -> str | None:
-        """Display name for a tool call, suffixed with the action for a manager tool.
+    def _tool_info(self, tool: Any, tool_args: dict[str, Any] | str | None, result: str | None) -> ToolInfo:
+        """Build the ToolInfo of one call: technical name plus the user-facing labels.
 
-        The registry managers each expose a single tool (``services_manager`` …) whose
-        one argument is a discriminated ``action`` union, so a raw tool-call event only
-        ever shows the manager's name. Read the discriminator from the call arguments and
-        surface which action ran — ``services_manager`` → ``services_manager_create`` —
-        so the front distinguishes the operations. Purely cosmetic (the LLM function name
-        and HITL matching are unaffected); any other tool keeps its name unchanged.
+        ``tool_name`` stays the LLM function name (HITL, loader and frontend-tool dispatch match
+        on it). The labels come from the toolkit owning the function; a function no toolkit owns
+        (an AG-UI frontend tool, a team member) gets its humanized name and no function label.
 
         Args:
-            tool: The Agno tool execution carrying ``tool_name`` and ``tool_args``.
+            tool: The Agno tool execution carrying ``tool_call_id``, ``tool_name`` and ``tool_args``.
+            tool_args: Arguments to forward on the event.
+            result: Tool result to forward on the event.
 
         Returns:
-            ``"<manager>_<action>"`` for a manager call whose action resolves, else the
-            unchanged tool name.
+            The ToolInfo carried by the tool-call event.
         """
         name = tool.tool_name
-        if not name or not name.endswith("_manager"):
-            return name
-        action = tool.tool_args.get("action") if isinstance(tool.tool_args, dict) else None
-        # The nested action arrives as a dict ({"action": "create", ...}) or, from some models, as a
-        # JSON string of that dict — parse the string so we surface the discriminator, not the blob.
-        if isinstance(action, str) and action.startswith("{"):
-            try:
-                action = json.loads(action)
-            except ValueError:
-                action = None
-        if isinstance(action, dict):
-            action = action.get("action")
-        # Only ever append a clean discriminator ("search", "change_visibility"); never a raw payload.
-        return f"{name}_{action}" if isinstance(action, str) and action.isidentifier() else name
+        toolkit = self._toolkits.get(name) if name else None
+        labels: tuple[str | None, str | None] = (
+            toolkit.display_labels(name, tool.tool_args)
+            if toolkit is not None
+            else (ToolInfo.humanize(name) if name else None, None)
+        )
+        return ToolInfo(
+            tool_call_id=tool.tool_call_id,
+            tool_name=name,
+            tool_args=tool_args,
+            result=result,
+            tool_display_name=labels[0],
+            function_display_name=labels[1],
+        )
 
     def _handle_tool_call_started(
         self, agno_event: AgnoToolCallStartedEvent, timestamp: Any
@@ -673,12 +679,7 @@ class AgnoStreamAdapter:
         tool = agno_event.tool
         tool_info = None
         if tool:
-            tool_info = ToolInfo(
-                tool_call_id=tool.tool_call_id,
-                tool_name=self._display_tool_name(tool),
-                tool_args=tool.tool_args,
-                result=None,
-            )
+            tool_info = self._tool_info(tool, tool.tool_args, None)
             if tool.tool_call_id:
                 self._open_tool_calls[tool.tool_call_id] = (self._run_key, self._last_metadata, tool_info)
         events.append(
@@ -705,12 +706,7 @@ class AgnoStreamAdapter:
         tool_call_id = None
         if tool:
             tool_call_id = tool.tool_call_id
-            tool_info = ToolInfo(
-                tool_call_id=tool_call_id,
-                tool_name=self._display_tool_name(tool),
-                tool_args=tool.tool_args,
-                result=tool.result,
-            )
+            tool_info = self._tool_info(tool, tool.tool_args, tool.result)
 
         if tool_call_id:
             self._closed_tool_call_ids.add(tool_call_id)
@@ -778,14 +774,7 @@ class AgnoStreamAdapter:
             if not tool_call_id or tool_call_id in seen_ids:
                 continue
             seen_ids.add(tool_call_id)
-            tool_info = ToolInfo(
-                tool_call_id=tool_call_id,
-                # Same action-suffix as the in-process managers: an external-execution
-                # manager (load_manager) surfaces as load_manager_load_tool, not just load_manager.
-                tool_name=self._display_tool_name(tool_exec),
-                tool_args=tool_exec.tool_args,
-                result=None,
-            )
+            tool_info = self._tool_info(tool_exec, tool_exec.tool_args, None)
             self._closed_tool_call_ids.add(tool_call_id)
             opened = self._open_tool_calls.pop(tool_call_id, None)
             if opened is not None:
@@ -849,12 +838,7 @@ class AgnoStreamAdapter:
 
         tool_info = None
         if tool:
-            tool_info = ToolInfo(
-                tool_call_id=tool_call_id,
-                tool_name=self._display_tool_name(tool),
-                tool_args=None,
-                result=None,
-            )
+            tool_info = self._tool_info(tool, None, None)
 
         if tool_call_id:
             self._closed_tool_call_ids.add(tool_call_id)

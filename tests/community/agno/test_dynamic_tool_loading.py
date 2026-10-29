@@ -21,7 +21,8 @@ from agno.tools.function import Function
 
 from digitalkin.community.agno.hitl import AgnoHitlRunner
 from digitalkin.community.agno.models import PauseInfo
-from digitalkin.community.agno.toolkits import LoadManager
+from digitalkin.community.agno.toolkits import DkToolkit, LoadManager
+from digitalkin.models.events import ToolCallStartedEvent
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.services.registry import RegistryModuleType
 
@@ -272,6 +273,9 @@ class _FakeAdapter:
     """Reports a pause and passes no events through (drives _drive deterministically)."""
 
     is_paused = True
+
+    def __init__(self, toolkits: dict[str, Any] | None = None) -> None:
+        self.toolkits = toolkits
 
     def to_digitalkin_events(self, _event: Any) -> list[Any]:
         return []
@@ -610,3 +614,130 @@ class TestContinueKeepsResolvedTools:
         assert "rag__search_documents" in seen[1], f"loaded tool is not callable: {seen[1]}"
         # The factory must survive so the next turn still merges that turn's frontend tools.
         assert team.tools is factory
+
+
+class TestToolLabels:
+    """The runner hands the adapter the live toolkits, so every call carries its labels."""
+
+    @staticmethod
+    def _toolkits(info: Any) -> tuple[type, type]:
+        """Build a labelled always-present manager and the labelled toolkit a load appends."""
+
+        class RagToolkit(DkToolkit):
+            def __init__(self, context: Any = None, module_info: Any = None) -> None:
+                super().__init__(name="rag", tools=[self.rag__search_documents], display_name="Document search")
+                self.tool_module_info = info if module_info is None else module_info
+
+            async def rag__search_documents(self, query: str) -> str:
+                """Search documents.
+
+                Args:
+                    query: The search query.
+
+                Returns:
+                    The results.
+                """
+                return "results"
+
+        class ToolsManager(DkToolkit):
+            def __init__(self) -> None:
+                super().__init__(name="tools_manager", tools=[self.tools_manager], display_name="Tools")
+
+            async def tools_manager(self, action: str) -> str:
+                """Administer tool setups.
+
+                Args:
+                    action: The action to run.
+
+                Returns:
+                    The result.
+                """
+                return "found"
+
+        return RagToolkit, ToolsManager
+
+    @pytest.mark.asyncio
+    async def test_loaded_tool_calls_carry_labels(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from agno.agent import Agent
+        from agno.run.agent import RunOutput
+
+        from digitalkin.community.agno import module_toolkit
+        from digitalkin.community.agno.agui_tools import AguiTools
+
+        info = _tool_info(setup_id="setups:rag", module_id="modules:rag")
+        info.slug = "rag"
+        rag_toolkit, tools_manager = self._toolkits(info)
+        monkeypatch.setattr(module_toolkit, "ModuleToolkit", rag_toolkit)
+
+        loader = LoadManager(context=_load_context(info, module_id="modules:rag"))
+        base_tools: list[Any] = [tools_manager(), loader]
+        loader.bind_tools(base_tools)
+        model = _ScriptedModel(
+            script=[
+                {"name": "tools_manager", "args": {"action": "search"}},
+                {"name": "load_manager", "args": {"action": {"action": "tool", "setup_id": "setups:rag"}}},
+                {"name": "rag__search_documents", "args": {"query": "hi"}},
+            ],
+            seen=[],
+        )
+        agent = Agent(
+            name="agent", model=model, tools=AguiTools.make_tools_factory(base_tools), cache_callables=False, telemetry=False
+        )
+        runner = AgnoHitlRunner(
+            agent=agent,
+            store=SimpleNamespace(save=AsyncMock(), load=AsyncMock(return_value=None), delete=AsyncMock()),
+            tool_loader=loader,
+        )
+        sent: list[Any] = []
+
+        async def _send(event: Any) -> None:
+            sent.append(event)
+
+        await runner._drive(
+            stream=agent.arun(
+                "go", stream=True, stream_events=True, yield_run_output=True, dependencies={"agui_tools": []}
+            ),
+            send=_send,
+            thread_id="t1",
+            run_output_cls=RunOutput,
+            agui_tools=[],
+        )
+
+        labels = {
+            event.tool.tool_name: (event.tool.tool_display_name, event.tool.function_display_name)
+            for event in sent
+            if isinstance(event, ToolCallStartedEvent) and event.tool is not None
+        }
+        assert labels == {
+            "tools_manager": ("Tools", None),
+            "load_manager": ("Load Manager", "Load tool"),
+            "rag__search_documents": ("Document search", None),
+        }
+
+    def test_toolkit_map_indexes_each_function_of_a_dk_toolkit(self) -> None:
+        from agno.tools import Toolkit
+
+        _, tools_manager = self._toolkits(_tool_info())
+        manager, loader = tools_manager(), LoadManager()
+        plain = Toolkit(name="plain", tools=[lambda: "x"])
+        runner = AgnoHitlRunner(
+            agent=SimpleNamespace(tools=lambda _deps: [manager, loader, plain, "not-a-toolkit"]),
+            store=SimpleNamespace(),
+        )
+
+        assert runner._toolkit_map() == {"tools_manager": manager, "load_manager": loader}
+
+    def test_toolkit_map_without_tools_is_empty(self) -> None:
+        runner = AgnoHitlRunner(agent=SimpleNamespace(), store=SimpleNamespace())
+
+        assert runner._toolkit_map() == {}
+
+    def test_toolkit_map_survives_a_failing_tools_factory(self) -> None:
+        """A custom tools factory that rejects a None argument must not fail the run for labels."""
+
+        def factory(run_context: Any) -> list[Any]:
+            return run_context.dependencies["tools"]
+
+        runner = AgnoHitlRunner(agent=SimpleNamespace(tools=factory), store=SimpleNamespace(), tool_loader=LoadManager())
+
+        assert runner._toolkit_map() == {}

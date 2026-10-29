@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from agno.agent import Agent
     from agno.models.message import Message as AgnoMessage
 
+    from digitalkin.community.agno.toolkits.base import DkToolkit
     from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
     from digitalkin.models.events import BaseAgentRunEvent
     from digitalkin.models.module import ModuleContext
@@ -436,6 +437,38 @@ class AgnoHitlRunner:
 
         return LoadManager.find(tools)
 
+    def _toolkit_map(self) -> dict[str, DkToolkit]:
+        """Map each function of the agent's live DkToolkits to its toolkit, to label tool calls.
+
+        Built from the current tool list, so a toolkit loaded by ``load_manager`` is labelled on
+        the auto-continue that follows. Team members' tools are not listed and fall back to
+        humanized names in the adapter.
+
+        Returns:
+            Function name -> owning toolkit.
+        """
+        from digitalkin.community.agno.toolkits.base import DkToolkit
+
+        tools = vars(self._agent).get("tools")
+        if callable(tools) and not isinstance(tools, list):
+            # Labels are cosmetic: a custom factory that needs a real run context must not fail the run.
+            try:
+                tools = tools(None)
+            except Exception:
+                logger.warning(
+                    "AgnoHitlRunner: tools factory failed without a run context, tool labels fall back",
+                    exc_info=True,
+                )
+                return {}
+        if not isinstance(tools, list):
+            return {}
+        return {
+            name: tool
+            for tool in tools
+            if isinstance(tool, DkToolkit)
+            for name in (*tool.functions, *tool.async_functions)
+        }
+
     async def run(
         self,
         message: str,
@@ -786,7 +819,7 @@ class AgnoHitlRunner:
 
         try:
             for _ in range(20):
-                adapter = AgnoStreamAdapter()
+                adapter = AgnoStreamAdapter(toolkits=self._toolkit_map())
                 final_run_output: RunOutput | TeamRunOutput | None = None
 
                 async for raw_event in stream:

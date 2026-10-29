@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1184,7 +1184,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "1.0.5.dev9"
+version = "1.0.6.dev1"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },

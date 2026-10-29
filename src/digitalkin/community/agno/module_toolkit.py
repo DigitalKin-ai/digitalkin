@@ -24,7 +24,7 @@ from digitalkin.community.agno.models import ToolCallMetadata, ToolOutputMetadat
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
-from digitalkin.models.events import SourceCitation
+from digitalkin.models.events import SourceCitation, ToolInfo
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
@@ -127,6 +127,7 @@ class ModuleToolkit(DkToolkit):
             agno_functions.append(
                 Function(
                     name=wrapper.__name__,
+                    title=tool_def.display_name or ToolInfo.humanize(tool_def.name),
                     description=tool_def.description or f"Execute the {tool_def.name} tool.",
                     parameters=tool_def.parameters_schema,
                     entrypoint=wrapper,
@@ -174,7 +175,12 @@ class ModuleToolkit(DkToolkit):
             or tool_module_info.module_name
             or tool_module_info.slug.replace(":", "_").replace(".", "_")
         )
-        super().__init__(name=f"{toolkit_name}_toolkit", tools=agno_functions, context=self._context)
+        super().__init__(
+            name=f"{toolkit_name}_toolkit",
+            tools=agno_functions,
+            context=self._context,
+            display_name=tool_module_info.tool_name,
+        )
 
     @property
     def module_id(self) -> str:
