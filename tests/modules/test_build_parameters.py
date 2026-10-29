@@ -1,4 +1,4 @@
-"""Tests for _build_parameters_from_schema and _extract_tools_from_schema.
+"""Tests for _build_parameters_from_schema and extract_tools_from_schema.
 
 Validates that direct JSON Schema extraction (with inline_refs) handles
 $ref, oneOf, anyOf, enums, const fields, dict types, nested models,
@@ -105,7 +105,7 @@ SCHEMA: dict = {
 
 
 def _inline_def(def_name: str) -> dict:
-    """Inline $refs for a sub-schema, mimicking _extract_tools_from_schema."""
+    """Inline $refs for a sub-schema, mimicking extract_tools_from_schema."""
     return LlmReadySchema.inline_refs({**SCHEMA["$defs"][def_name], "$defs": SCHEMA["$defs"]})
 
 
@@ -122,7 +122,7 @@ class TestBuildParametersFromSchema:
         assert "created_at" not in props
 
     def test_text_payload_required(self) -> None:
-        """body is required, kind is not (has default)."""
+        """The body field is required, kind is not (has default)."""
         result = ToolModuleInfo._build_parameters_from_schema(_inline_def("TextPayload"))
         assert "body" in result["required"]
         assert "kind" not in result["required"]
@@ -209,7 +209,7 @@ class TestBuildParametersFromSchema:
         assert result["properties"]["content"]["description"] == "Any content"
 
     def test_anyof_union_preserved(self) -> None:
-        """str | None union (anyOf) is preserved."""
+        """A str | None union (anyOf) is preserved."""
         schema = {
             "properties": {
                 "protocol": {"const": "test", "type": "string"},
@@ -226,7 +226,7 @@ class TestBuildParametersFromSchema:
 
 
 class TestExtractToolsFromSchema:
-    """Tests for _extract_tools_from_schema with protocol-based discriminator."""
+    """Tests for extract_tools_from_schema with protocol-based discriminator."""
 
     def _make_protocol_schema(self) -> dict:
         """Adapt SCHEMA to use 'protocol' as discriminator (as real triggers do)."""
@@ -257,20 +257,20 @@ class TestExtractToolsFromSchema:
 
     def test_extracts_tool_definitions(self) -> None:
         """Extracts ToolDefinitions from protocol-discriminated schema."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         names = {t.name for t in tools}
         assert "search" in names
         assert "ping" in names
 
     def test_protocol_stripped_from_parameters(self) -> None:
         """Protocol field is not in parameters_schema."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         for tool in tools:
             assert "protocol" not in tool.parameters_schema.get("properties", {})
 
     def test_search_tool_has_query_and_category(self) -> None:
         """Search tool parameters include query and resolved category."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         search = next(t for t in tools if t.name == "search")
         props = search.parameters_schema["properties"]
         assert "query" in props
@@ -278,7 +278,7 @@ class TestExtractToolsFromSchema:
 
     def test_search_tool_category_ref_resolved(self) -> None:
         """$ref to Category enum is inlined in extracted tool."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         search = next(t for t in tools if t.name == "search")
         cat = search.parameters_schema["properties"]["category"]
         assert "$ref" not in cat
@@ -287,7 +287,7 @@ class TestExtractToolsFromSchema:
 
     def test_search_tool_required_excludes_protocol(self) -> None:
         """Required list has query and category but not protocol."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         search = next(t for t in tools if t.name == "search")
         assert "query" in search.parameters_schema["required"]
         assert "category" in search.parameters_schema["required"]
@@ -295,26 +295,26 @@ class TestExtractToolsFromSchema:
 
     def test_ping_tool_empty_parameters(self) -> None:
         """Ping tool has no parameters (only protocol, which is stripped)."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         ping = next(t for t in tools if t.name == "ping")
         assert ping.parameters_schema["properties"] == {}
         assert ping.parameters_schema["required"] == []
 
     def test_description_extracted(self) -> None:
         """Tool description comes from schema description field."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         search = next(t for t in tools if t.name == "search")
         assert search.description == "Search for information"
 
     def test_non_protocol_defs_skipped(self) -> None:
         """$defs without protocol const (like Category enum) are skipped."""
-        tools = ToolModuleInfo._extract_tools_from_schema(self._make_protocol_schema())
+        tools = ToolModuleInfo.extract_tools_from_schema(self._make_protocol_schema())
         names = {t.name for t in tools}
         assert "Category" not in names
 
     def test_no_tools_when_no_protocol_const(self) -> None:
         """Original schema (using 'kind'/'rule_type', not 'protocol') yields no tools."""
-        tools = ToolModuleInfo._extract_tools_from_schema(SCHEMA)
+        tools = ToolModuleInfo.extract_tools_from_schema(SCHEMA)
         assert tools == []
 
     def test_nested_model_ref_inlined(self) -> None:
@@ -344,7 +344,7 @@ class TestExtractToolsFromSchema:
                 },
             },
         }
-        tools = ToolModuleInfo._extract_tools_from_schema(schema)
+        tools = ToolModuleInfo.extract_tools_from_schema(schema)
         search = next(t for t in tools if t.name == "search")
         cost_budget = search.parameters_schema["properties"]["cost_budget"]
         # $ref should be resolved
@@ -380,7 +380,7 @@ class TestExtractToolsFromSchema:
                 },
             },
         }
-        tools = ToolModuleInfo._extract_tools_from_schema(schema)
+        tools = ToolModuleInfo.extract_tools_from_schema(schema)
         tool = next(t for t in tools if t.name == "cit_match")
         citations = tool.parameters_schema["properties"]["citations"]
         assert citations["type"] == "array"
@@ -403,7 +403,7 @@ class TestExtractToolsFromSchema:
                 },
             },
         }
-        tools = ToolModuleInfo._extract_tools_from_schema(schema)
+        tools = ToolModuleInfo.extract_tools_from_schema(schema)
         tool = next(t for t in tools if t.name == "patch")
         assert "patch" in tool.parameters_schema["properties"]
         assert "patch" in tool.parameters_schema["required"]

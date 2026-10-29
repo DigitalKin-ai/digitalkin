@@ -710,7 +710,7 @@ class TestTriggerDisplayName:
     def test_extract_reads_display_name(self) -> None:
         """Extraction copies the label and keeps it out of the LLM parameters."""
         schema = TypeAdapter(_SearchTrigger | _ListTrigger).json_schema()
-        tools = {t.name: t for t in ToolModuleInfo._extract_tools_from_schema(schema)}
+        tools = {t.name: t for t in ToolModuleInfo.extract_tools_from_schema(schema)}
 
         assert tools["search"].display_name == "Search documents"
         assert tools["list_files"].display_name is None
@@ -720,7 +720,7 @@ class TestTriggerDisplayName:
         """The label survives the utility extension and the json/ui schema split."""
         extended = UtilitySchemaExtender.create_extended_input_model(_LabelledInput)
         json_schema, _ = SchemaSplitter.split(extended.model_json_schema())
-        tools = {t.name: t for t in ToolModuleInfo._extract_tools_from_schema(json_schema)}
+        tools = {t.name: t for t in ToolModuleInfo.extract_tools_from_schema(json_schema)}
 
         assert tools["search"].display_name == "Search documents"
         assert tools["list_files"].display_name is None

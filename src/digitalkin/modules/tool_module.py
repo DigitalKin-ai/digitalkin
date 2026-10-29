@@ -39,7 +39,7 @@ class ToolModule(
             return
         missing = [
             tool.name
-            for tool in ToolModuleInfo._extract_tools_from_schema(input_format.model_json_schema())  # ruff: ignore[private-member-access]
+            for tool in ToolModuleInfo.extract_tools_from_schema(input_format.model_json_schema())
             if tool.display_name is None
         ]
         if missing:

@@ -201,7 +201,7 @@ class ToolInfo(BaseModel):
         Returns:
             The part after the last ``__``, underscores as spaces, first letter capitalized.
         """
-        label = name.rpartition("__")[2].replace("_", " ")
+        label = name.strip("_").rpartition("__")[2].replace("_", " ")
         return label[:1].upper() + label[1:]
 
 

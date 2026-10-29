@@ -163,10 +163,10 @@ class AgUiRunState:
     ) -> None:
         """Title the mission once: emit a ``mission_title`` custom event and record it.
 
-        A mission that has a title, or has used all its attempts, is left alone. An empty hook
-        result counts as one attempt; the attempt that reaches ``mission_title_attempts`` emits a
-        null title so the back knows none will come. Runs as ``title_task`` alongside the run; a
-        failure is logged, counts nothing and never fails the run.
+        A mission that has a title, or has used all its attempts, is left alone. An empty result,
+        an invalid title, a raising hook or one slower than ``mission_title_timeout`` counts as
+        one attempt; the attempt that reaches ``mission_title_attempts`` emits a null title so the
+        back knows none will come. Runs as ``title_task`` alongside the run and never raises.
 
         Args:
             context: Module context whose callbacks carry the event.
@@ -175,13 +175,24 @@ class AgUiRunState:
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             record = await context.storage.read("mission", "mission")
             mission = record.data if record is not None and isinstance(record.data, MissionRecord) else MissionRecord()
-            max_attempts = get_agui_settings().mission_title_attempts
-            if mission.title or mission.title_attempts >= max_attempts:
+            settings = get_agui_settings()
+            if mission.title or mission.title_attempts >= settings.mission_title_attempts:
                 return
-            title = await mission_title(context)
             attempts = mission.title_attempts + 1
-            if not title:
-                if attempts < max_attempts:
+            try:
+                title = MissionTitle(
+                    title=await asyncio.wait_for(mission_title(context), settings.mission_title_timeout) or None
+                )
+            except Exception:
+                logger.exception(
+                    "Mission title hook failed (attempt %d/%d)",
+                    attempts,
+                    settings.mission_title_attempts,
+                    extra=context.session.current_ids(),
+                )
+                title = MissionTitle(title=None)
+            if title.title is None:
+                if attempts < settings.mission_title_attempts:
                     await context.storage.upsert("mission", "mission", {"title": None, "title_attempts": attempts})
                     return
                 logger.info(
@@ -189,19 +200,16 @@ class AgUiRunState:
                     attempts,
                     extra=context.session.current_ids(),
                 )
-                title = None
             if not self.open:
                 return
             await context.callbacks.send_message(
                 AgUiOutput(
                     root=AgUiCustomEventOutput(
-                        event=AgUiCustomEvent(
-                            name="mission_title", value=MissionTitle(title=title).model_dump(mode="json")
-                        )
+                        event=AgUiCustomEvent(name="mission_title", value=title.model_dump(mode="json"))
                     )
                 )
             )
-            await context.storage.upsert("mission", "mission", {"title": title, "title_attempts": attempts})
+            await context.storage.upsert("mission", "mission", {"title": title.title, "title_attempts": attempts})
         except Exception:
             logger.exception("Mission title failed", extra=context.session.current_ids())
 
@@ -485,6 +493,8 @@ class AgUiMixin:
             )
         )
         await self._send_agui(context, output)
+        if context.agui_run is not None and context.agui_run.title_task is not None:
+            context.agui_run.title_task.cancel()
         context.agui_run = AgUiRunState()
         await context.agui_run.snapshot(context)
         if type(self).mission_title is not AgUiMixin.mission_title:

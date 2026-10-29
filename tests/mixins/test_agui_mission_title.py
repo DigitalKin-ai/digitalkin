@@ -8,12 +8,13 @@ alongside the run. ``RUN_FINISHED`` waits for the task, ``RUN_ERROR`` cancels it
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
 
+from digitalkin.mixins import agui_mixin
 from digitalkin.mixins.agui_mixin import AgUiMixin, AgUiRunState
 from digitalkin.models.events import (
     AgentRunEvent,
@@ -22,8 +23,13 @@ from digitalkin.models.events import (
     RunCompletedEvent,
     RunStartedEvent,
 )
+from digitalkin.models.services.services import ServicesMode
 from digitalkin.models.services.storage import MissionRecord
 from digitalkin.models.settings.agui import AgUiSettings
+from digitalkin.services.services_config import ServicesConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
@@ -170,13 +176,42 @@ class TestMissionTitleEmission:
         assert "agui_custom" not in _protocols(ctx)
         ctx.storage.upsert.assert_not_awaited()
 
-    async def test_failing_hook_does_not_count(self) -> None:
-        ctx = _ctx(MissionRecord(title_attempts=2))
+    async def test_failing_hook_counts_attempt(self) -> None:
+        ctx = _ctx(MissionRecord(title_attempts=1))
 
         await _titled(_Broken(), ctx)
 
         assert "agui_custom" not in _protocols(ctx)
-        ctx.storage.upsert.assert_not_awaited()
+        ctx.storage.upsert.assert_awaited_once_with("mission", "mission", {"title": None, "title_attempts": 2})
+
+    async def test_failing_hook_on_last_attempt_emits_null_title(self) -> None:
+        ctx = _ctx(MissionRecord(title_attempts=2))
+
+        await _titled(_Broken(), ctx)
+
+        assert _frames(ctx)[-1]["event"] == {"type": "CUSTOM", "name": "mission_title", "value": {"title": None}}
+        ctx.storage.upsert.assert_awaited_once_with("mission", "mission", {"title": None, "title_attempts": 3})
+
+    async def test_invalid_title_counts_attempt(self) -> None:
+        ctx = _ctx()
+
+        await _titled(_Titled(42), ctx)  # type: ignore[arg-type]
+
+        assert "agui_custom" not in _protocols(ctx)
+        ctx.storage.upsert.assert_awaited_once_with("mission", "mission", {"title": None, "title_attempts": 1})
+
+    async def test_slow_hook_times_out_and_counts_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agui_mixin, "get_agui_settings", lambda: AgUiSettings(mission_title_timeout=0.01))
+        ctx = _ctx()
+        mixin = _Gated()
+
+        await _start(mixin, ctx)
+        await _complete(mixin, ctx)
+
+        assert ctx.agui_run.title_task.exception() is None
+        assert "agui_custom" not in _protocols(ctx)
+        assert _protocols(ctx)[-1] == "agui_run_finished"
+        ctx.storage.upsert.assert_awaited_once_with("mission", "mission", {"title": None, "title_attempts": 1})
 
 
 class TestMissionTitleTask:
@@ -233,6 +268,21 @@ class TestMissionTitleTask:
         assert _protocols(ctx)[-1] == "agui_run_finished"
         assert ctx.agui_run.state["run"]["status"] == "completed"
 
+    async def test_new_run_cancels_the_previous_title(self) -> None:
+        ctx = _ctx()
+        mixin = _Gated()
+        await _start(mixin, ctx)
+        await mixin.entered.wait()
+        previous = ctx.agui_run.title_task
+
+        await _start(mixin, ctx)
+
+        with pytest.raises(asyncio.CancelledError):
+            await previous
+        assert ctx.agui_run.title_task is not previous
+        mixin.release.set()
+        await ctx.agui_run.title_task
+
     async def test_run_without_title_task_still_completes(self) -> None:
         ctx = _ctx()
 
@@ -266,4 +316,45 @@ class TestMissionTitleModels:
             MissionRecord(title_attempts=-1)
 
     def test_settings_defaults(self) -> None:
-        assert AgUiSettings().mission_title_attempts == 3
+        settings = AgUiSettings()
+
+        assert settings.mission_title_attempts == 3
+        assert settings.mission_title_timeout == pytest.approx(15.0)
+
+
+class TestMissionTitleStorage:
+    """Round trip through the local storage strategy a module actually gets from ``ServicesConfig``."""
+
+    @pytest.fixture
+    def ctx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        monkeypatch.chdir(tmp_path)
+        ctx = _ctx()
+        ctx.storage = ServicesConfig(mode=ServicesMode.LOCAL).init_strategy(
+            "storage", "missions:m1", "setups:s1", "setup_versions:sv1"
+        )
+        return ctx
+
+    async def test_title_is_kept_across_runs(self, ctx: MagicMock) -> None:
+        first = _Titled("Quarterly report")
+        await _titled(first, ctx)
+        second = _Titled("Other title")
+        await _titled(second, ctx)
+
+        record = await ctx.storage.read("mission", "mission")
+        assert record.data == MissionRecord(title="Quarterly report", title_attempts=1)
+        assert (first.calls, second.calls) == (1, 0)
+        assert [frame["event"]["value"] for frame in _frames(ctx) if frame["protocol"] == "agui_custom"] == [
+            {"title": "Quarterly report"}
+        ]
+
+    async def test_attempts_accumulate_until_null_title(self, ctx: MagicMock) -> None:
+        mixin = _Titled(None)
+        for _ in range(4):
+            await _titled(mixin, ctx)
+
+        record = await ctx.storage.read("mission", "mission")
+        assert record.data == MissionRecord(title=None, title_attempts=3)
+        assert mixin.calls == 3
+        assert [frame["event"]["value"] for frame in _frames(ctx) if frame["protocol"] == "agui_custom"] == [
+            {"title": None}
+        ]

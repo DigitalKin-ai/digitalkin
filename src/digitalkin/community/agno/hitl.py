@@ -455,7 +455,10 @@ class AgnoHitlRunner:
             try:
                 tools = tools(None)
             except Exception:
-                logger.warning("AgnoHitlRunner: tools factory failed without a run context, tool labels fall back")
+                logger.warning(
+                    "AgnoHitlRunner: tools factory failed without a run context, tool labels fall back",
+                    exc_info=True,
+                )
                 return {}
         if not isinstance(tools, list):
             return {}

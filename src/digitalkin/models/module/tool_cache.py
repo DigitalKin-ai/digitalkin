@@ -120,7 +120,7 @@ class ToolModuleInfo(ModuleInfo):
             module_name=module_info.module_name,
             documentation=module_info.documentation,
             status=module_info.status,
-            tools=cls._extract_tools_from_schema(input_schema),
+            tools=cls.extract_tools_from_schema(input_schema),
             setup_id=setup_id,
             tool_name=tool_name,
             cost_config=schemas.get("cost", {}),
@@ -153,7 +153,7 @@ class ToolModuleInfo(ModuleInfo):
         return {"type": "object", "properties": param_properties, "required": required_list}
 
     @staticmethod
-    def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
+    def extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
         """Extract tool definitions from a discriminated union input schema.
 
         Args:

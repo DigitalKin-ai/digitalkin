@@ -24,6 +24,9 @@ class AgUiSettings(BaseSettings):
     mission_title_attempts: int = Field(
         default=3, gt=0, description="Runs that may try to title a mission before a null title is emitted."
     )
+    mission_title_timeout: float = Field(
+        default=15.0, gt=0, description="Seconds the mission_title hook may take before the attempt counts as failed."
+    )
 
 
 @lru_cache(maxsize=1)
