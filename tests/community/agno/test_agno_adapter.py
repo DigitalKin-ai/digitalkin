@@ -46,6 +46,7 @@ class _FakeRunEvent(str, Enum):
     run_completed = "RunCompleted"
     run_error = "RunError"
     run_paused = "RunPaused"
+    run_continued = "RunContinued"
     reasoning_started = "ReasoningStarted"
     reasoning_content_delta = "ReasoningContentDelta"
     reasoning_step = "ReasoningStep"
@@ -66,6 +67,7 @@ class _FakeTeamRunEvent(str, Enum):
     run_completed = "TeamRunCompleted"
     run_error = "TeamRunError"
     run_paused = "TeamRunPaused"
+    run_continued = "TeamRunContinued"
     reasoning_started = "TeamReasoningStarted"
     reasoning_content_delta = "TeamReasoningContentDelta"
     reasoning_step = "TeamReasoningStep"
@@ -138,6 +140,7 @@ _TOOL_EXEC_DEFAULTS: dict[str, Any] = {
     "tool_name": None,
     "tool_args": None,
     "external_execution_required": False,
+    "result": None,
 }
 
 

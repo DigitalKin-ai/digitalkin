@@ -184,9 +184,16 @@ class StreamValidator:
         return out
 
 
+_RESUME = object()
+"""Stands in the event list for the runner resolving a pause itself and continuing."""
+
+
 async def _stream(name: str, agno_events: list[Any], *, pause_ids: list[str] | None = None) -> list[dict[str, Any]]:
     adapter, host, wire = AgnoStreamAdapter(), _Host(), _Wire()
     for agno_event in agno_events:
+        if agno_event is _RESUME:
+            adapter.resume()
+            continue
         for dk_event in adapter.to_digitalkin_events(agno_event):
             await host.send_message(wire, dk_event)  # type: ignore[arg-type]
     for dk_event in adapter.flush():
@@ -289,6 +296,97 @@ class TestStreamInvariants:
         assert closed[0]["subagentRunId"] == "m1"
         assert events[-1]["type"] == "RUN_FINISHED"
         assert events[-1]["outcome"]["type"] == "interrupt"
+
+    async def test_member_pause_leaves_its_sibling_streaming(self) -> None:
+        events = await _stream(
+            "member_pause_sibling",
+            [
+                _start(),
+                _member("m1"),
+                _member("m2", name="Bob"),
+                _content("still going", run_id="m2"),
+                _make_event(_FakeRunEvent.run_paused, run_id="m1", parent_run_id="r1", tools=[], requirements=[]),
+                _content(" and on", run_id="m2"),
+                _make_event(_FakeTeamRunEvent.run_paused, run_id="r1", tools=[], requirements=[]),
+            ],
+            pause_ids=[],
+        )
+        assert StreamValidator.violations(events) == []
+        text_starts = [e for e in events if e["type"] == "TEXT_MESSAGE_START"]
+        assert len(text_starts) == 1
+
+    @staticmethod
+    def _member_pause_under_delegation() -> list[Any]:
+        """A delegation whose member pauses: Agno closes the call with its pause marker."""
+        call = _make_tool(tool_call_id="d1", tool_name="delegate_task_to_member", tool_args={})
+        marker = _make_tool(
+            tool_call_id="d1",
+            tool_name="delegate_task_to_member",
+            tool_args={},
+            result="Member 'Alice' requires human input before continuing.",
+        )
+        return [
+            _start(),
+            _make_event(_FakeTeamRunEvent.tool_call_started, run_id="r1", tool=call),
+            _member("m1"),
+            _make_event(_FakeRunEvent.run_paused, run_id="m1", parent_run_id="r1", tools=[], requirements=[]),
+            _make_event(_FakeTeamRunEvent.tool_call_completed, run_id="r1", tool=marker, content=marker.result),
+            _make_event(_FakeTeamRunEvent.run_paused, run_id="r1", tools=[], requirements=[]),
+        ]
+
+    @staticmethod
+    def _delegation_results(events: list[dict[str, Any]]) -> list[str]:
+        return [e["content"] for e in events if e["type"] == "TOOL_CALL_RESULT" and e["toolCallId"] == "d1"]
+
+    async def test_a_pause_that_reaches_the_front_keeps_the_marker(self) -> None:
+        events = await _stream("member_pause_front", self._member_pause_under_delegation(), pause_ids=[])
+
+        assert StreamValidator.violations(events) == []
+        assert self._delegation_results(events) == ["Member 'Alice' requires human input before continuing."]
+
+    async def test_a_member_failing_after_the_resume_closes_its_delegation(self) -> None:
+        events = await _stream(
+            "member_resume_error",
+            [
+                *self._member_pause_under_delegation(),
+                _RESUME,
+                _make_event(_FakeRunEvent.run_error, run_id="m1", parent_run_id="r1", content="boom"),
+                _make_event(_FakeTeamRunEvent.run_completed, run_id="r1", content="done"),
+            ],
+        )
+
+        assert StreamValidator.violations(events) == []
+        assert self._delegation_results(events) == []
+        assert [e["toolCallId"] for e in events if e["type"] == "TOOL_CALL_END"] == ["d1"]
+
+    async def test_a_run_ending_with_the_member_never_finished_closes_the_delegation(self) -> None:
+        events = await _stream(
+            "member_resume_no_finish",
+            [
+                *self._member_pause_under_delegation(),
+                _RESUME,
+                _make_event(_FakeTeamRunEvent.run_completed, run_id="r1", content="done"),
+            ],
+        )
+
+        assert StreamValidator.violations(events) == []
+        assert [e["toolCallId"] for e in events if e["type"] == "TOOL_CALL_END"] == ["d1"]
+
+    async def test_a_tool_merely_quoting_the_marker_is_not_held(self) -> None:
+        result = "The doc says: requires human input."
+        tool = _make_tool(tool_call_id="c1", tool_name="search", tool_args={}, result=result)
+        events = await _stream(
+            "marker_outside_pause",
+            [
+                _start(),
+                _make_event(_FakeRunEvent.tool_call_started, run_id="r1", tool=tool),
+                _make_event(_FakeRunEvent.tool_call_completed, run_id="r1", tool=tool, content=result),
+                _make_event(_FakeTeamRunEvent.run_completed, run_id="r1", content="done"),
+            ],
+        )
+
+        assert StreamValidator.violations(events) == []
+        assert [e["content"] for e in events if e["type"] == "TOOL_CALL_RESULT"] == [result]
 
     async def test_subagent_error_then_parent_completes(self) -> None:
         events = await _stream(

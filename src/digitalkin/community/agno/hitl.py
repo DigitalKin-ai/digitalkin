@@ -32,7 +32,9 @@ from ag_ui.core.types import (
     ToolCall as AgUiToolCall,
 )
 from agno.media import Image
+from agno.run.agent import RunCompletedEvent as AgentRunCompleted
 from agno.run.agent import RunOutput
+from agno.run.team import RunCompletedEvent as TeamRunCompleted
 from agno.run.team import TeamRunOutput
 from agno.team import Team
 from agno.utils.team import get_member_id
@@ -545,6 +547,7 @@ class AgnoHitlRunner:
             thread_id=thread_id,
             run_output_cls=self._run_output_cls,
             agui_tools=agui_tools,
+            continuing=run_output,
         )
 
         if pause_info is None:
@@ -764,6 +767,7 @@ class AgnoHitlRunner:
         thread_id: str,
         run_output_cls: type[RunOutput | TeamRunOutput],
         agui_tools: list[AgUiTool] | None = None,
+        continuing: RunOutput | TeamRunOutput | None = None,
     ) -> PauseInfo | None:
         """Drain an Agno stream, forward events, and persist or auto-continue on pause.
 
@@ -778,33 +782,39 @@ class AgnoHitlRunner:
             thread_id: AG-UI thread identifier (storage key on a frontend pause).
             run_output_cls: The ``RunOutput``/``TeamRunOutput`` class used to spot the terminal run object.
             agui_tools: Frontend tools to re-pass to Agno on an auto-continue.
+            continuing: The paused run this stream continues, ``None`` on a fresh run.
 
         Returns:
             :class:`PauseInfo` on a frontend pause, ``None`` on completion.
         """
         from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
+        # One adapter across auto-continues: they are one AG-UI run, so it must remember the
+        # delegations in flight and every id it has closed.
+        adapter = AgnoStreamAdapter()
         try:
             for _ in range(20):
-                adapter = AgnoStreamAdapter()
                 final_run_output: RunOutput | TeamRunOutput | None = None
 
                 async for raw_event in stream:
                     if isinstance(raw_event, run_output_cls):
                         final_run_output = raw_event
                         continue
+                    if continuing is not None:
+                        self._settle_delegation(continuing, raw_event)
                     for event in adapter.to_digitalkin_events(raw_event):
                         await send(event)
 
-                for event in adapter.flush():
-                    await send(event)
-
-                if not (adapter.is_paused and final_run_output is not None and final_run_output.is_paused):
+                paused_run = final_run_output if adapter.is_paused else None
+                if paused_run is None or not paused_run.is_paused:
+                    for event in adapter.flush():
+                        await send(event)
                     return None
 
                 # Resolve any load_manager calls in-process; if the pause has nothing left for the
-                # front, auto-continue so discover -> load -> use reads as a single turn.
-                if await self._load_paused_tools(final_run_output) and not self._pending_external(final_run_output):
+                # front, auto-continue so discover -> load -> use reads as a single turn. Before the
+                # flush, which would tell the front every open delegation waits on the user.
+                if await self._load_paused_tools(paused_run) and not self._pending_external(paused_run):
                     # Agno caches the tools-factory output per run, so a continue would re-resolve
                     # from the stale pre-load cache and miss the just-loaded tool. Invalidate it.
                     from agno.utils.callables import aclear_callable_cache  # pyright: ignore[reportMissingImports]
@@ -813,12 +823,16 @@ class AgnoHitlRunner:
                     # ...and hand the continue a resolved list, because a Team never re-invokes the
                     # factory on acontinue_run at all. See _resolve_tools_for_continue.
                     self._resolve_tools_for_continue(agui_tools)
-                    stream = self._continue_stream(final_run_output, agui_tools)
+                    adapter.resume()
+                    continuing = paused_run
+                    stream = self._continue_stream(paused_run, agui_tools)
                     continue
 
-                pause_info = await self._store.save(run_output=final_run_output, thread_id=thread_id)
+                for event in adapter.flush():
+                    await send(event)
+                pause_info = await self._store.save(run_output=paused_run, thread_id=thread_id)
                 # Attach AG-UI-shaped messages so the front can materialise the tool_call.
-                pause_info.new_messages = HitlEvents.agno_messages_to_agui(final_run_output.messages or [])
+                pause_info.new_messages = HitlEvents.agno_messages_to_agui(paused_run.messages or [])
                 return pause_info
 
             logger.warning("AgnoHitlRunner: auto-continue limit reached for thread_id=%s", thread_id)
@@ -842,6 +856,43 @@ class AgnoHitlRunner:
             # The swapped-in list is only valid for the continues issued above; the factory is
             # the steady state every later run resolves from.
             self._restore_tools()
+
+    @staticmethod
+    def _settle_delegation(run_output: RunOutput | TeamRunOutput, event: Any) -> None:
+        """Replace Agno's pause marker with the answer of the member that just finished.
+
+        Agno does this itself only when the pause holds member requirements alone. With a
+        team-level one (a frontend tool answered in the same pause, or still on the run from an
+        earlier one) it drops the member's result and the leader reads the marker: it then reports
+        a member waiting on a human, which never was. The leader's messages are built from
+        ``run_output`` after the member's events, so correcting it here reaches the model.
+
+        Args:
+            run_output: The run being continued.
+            event: The Agno event just received.
+        """
+        if not isinstance(event, AgentRunCompleted | TeamRunCompleted):
+            return
+        if event.parent_run_id != run_output.run_id or not event.content:
+            return
+        name = event.agent_name if isinstance(event, AgentRunCompleted) else event.team_name
+        answer = str(event.content)
+        settled = {
+            f"Member '{name}' requires human input before continuing.": answer,
+            f"Agent {name}: Requires human input before continuing.": f"Agent {name}: {answer}",
+        }
+
+        def settle(text: str) -> str:
+            for marker, result in settled.items():
+                text = text.replace(marker, result)
+            return text
+
+        for message in run_output.messages or []:
+            if message.role == "tool" and isinstance(message.content, str):
+                message.content = settle(message.content)
+        for tool in run_output.tools or []:
+            if isinstance(tool.result, str):
+                tool.result = settle(tool.result)
 
     def _continue_stream(self, run_output: RunOutput | TeamRunOutput, agui_tools: list[AgUiTool] | None) -> Any:
         """Open the host's ``acontinue_run`` event stream for a paused run.

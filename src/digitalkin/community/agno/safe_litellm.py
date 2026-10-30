@@ -748,11 +748,13 @@ class SafeLiteLLM(LiteLLM):
 
         # Kept above the compaction threshold so it only catches what a fold could not. Without an
         # input budget it relies on litellm's window for the model id: a no-op for an unknown one.
+        # The window is read here: trim_messages' own lookup raises, and swallows it, on a map
+        # entry without `max_tokens`, which leaves the prompt untrimmed.
+        spec = litellm.model_cost.get(self.id, {})
+        budget = self.input_tokens or spec.get("max_input_tokens") or spec.get("max_tokens")
         trimmed = cast(
             "list[dict[str, Any]]",
-            trim_messages(bounded, self.id, max_tokens=int(self.input_tokens * 0.95))
-            if self.input_tokens
-            else trim_messages(bounded, self.id, trim_ratio=0.95),
+            trim_messages(bounded, self.id, max_tokens=int(budget * 0.95)) if budget else bounded,
         )
         if len(trimmed) < len(bounded):
             logger.warning(

@@ -279,6 +279,9 @@ class _FakeAdapter:
     def flush(self) -> list[Any]:
         return []
 
+    def resume(self) -> None:
+        pass
+
 
 class _FakeRunOutput:
     """Minimal RunOutput: pause state, tools, requirements, messages, to_dict.

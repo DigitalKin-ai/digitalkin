@@ -261,8 +261,9 @@ class TestContextWindowTrim:
     def tiny_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import litellm
 
-        spec = {**litellm.model_cost["claude-sonnet-4-6"], "max_input_tokens": 400}
-        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", spec)
+        # No `max_tokens`: litellm's published map dropped it and its own lookup raises without it.
+        spec = {k: v for k, v in litellm.model_cost["claude-sonnet-4-6"].items() if k != "max_tokens"}
+        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", {**spec, "max_input_tokens": 400})
 
     @staticmethod
     def _cached_tiny_model() -> SafeLiteLLM:
@@ -298,9 +299,21 @@ class TestContextWindowTrim:
         plain = _stock_model()._format_messages(self._long_conversation())
         marked = self._cached_tiny_model()._mark_cache_breakpoints(plain)
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            untouched = trim_messages(marked, "claude-sonnet-4-6")
+            untouched = trim_messages(marked, "claude-sonnet-4-6", max_tokens=300)
         assert "token trimming" in caplog.text
         assert len(untouched) == len(marked)
+
+    def test_window_falls_back_to_max_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A map entry without `max_input_tokens` still bounds the prompt, as litellm's lookup did."""
+        import litellm
+
+        spec = {k: v for k, v in litellm.model_cost["claude-sonnet-4-6"].items() if k != "max_input_tokens"}
+        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", {**spec, "max_tokens": 400})
+        assert len(_safe_model()._format_messages(self._long_conversation())) < 21
+
+    def test_unknown_model_is_left_untouched(self) -> None:
+        model = SafeLiteLLM(id="not-in-the-map", append_trailing_user_message=False)
+        assert len(model._format_messages(self._long_conversation())) == 21
 
 
 class TestCancelToken:
@@ -988,10 +1001,11 @@ class TestHistoryCompaction:
             return messages
 
         monkeypatch.setattr(safe_mod, "trim_messages", fake_trim)
+        monkeypatch.setitem(safe_mod.litellm.model_cost, "claude-sonnet-4-6", {"max_input_tokens": 1000})
 
         _safe_model()._format_messages([Message(role="user", content="hi")])
 
-        assert calls == [{"trim_ratio": 0.95}]
+        assert calls == [{"max_tokens": 950}]
 
     def test_trim_fits_the_input_budget_when_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The proxy model group is unknown to litellm: the budget from the spec drives the trim."""
