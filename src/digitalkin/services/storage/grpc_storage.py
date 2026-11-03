@@ -1,5 +1,7 @@
 """This module implements the default storage strategy."""
 
+from typing import Any
+
 import grpc
 from agentic_mesh_protocol.common.v1 import common_enums_pb2
 from agentic_mesh_protocol.pagination.v1 import pagination_pb2
@@ -9,7 +11,7 @@ from agentic_mesh_protocol.storage.v1 import (
     storage_messages_pb2,
     storage_service_pb2_grpc,
 )
-from google.protobuf.struct_pb2 import Struct
+from google.protobuf.struct_pb2 import Struct, Value
 from pydantic import BaseModel
 
 from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDeniedError, ServerError
@@ -24,7 +26,6 @@ from digitalkin.services.storage.storage_strategy import (
     StorageRecord,
     StorageStrategy,
 )
-from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -123,8 +124,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     def _build_record_from_proto(self, proto: storage_messages_pb2.StorageRecord) -> StorageRecord:
         """Convert a protobuf StorageRecord message into our Pydantic model.
 
-        Uses direct field access for scalar fields and selective MessageToDict
-        only for the nested Struct payload, avoiding full-message deserialization.
+        Uses direct field access for scalar fields and walks the nested Struct payload once,
+        avoiding full-message deserialization.
 
         Args:
             proto: gRPC StorageRecord
@@ -139,8 +140,12 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         dtype = DataType[storage_enums_pb2.DataType.Name(proto.data_type)]
         visibility = Visibility[common_enums_pb2.Visibility.Name(proto.visibility).removeprefix("VISIBILITY_")]
 
-        # Selective deserialization: only the nested Struct payload
-        payload = ProtoUtils.proto_to_dict(proto.data) if proto.HasField("data") else {}
+        # Struct holds every number as a double: whole numbers come back as int
+        payload = (
+            {k: self._from_struct_value(v) for k, v in proto.data.fields.items()} if proto.HasField("data") else {}
+        )
+        # TODO(validate): STORAGE-INT-ROUNDTRIP whole numbers of a stored payload read back as int, not float
+        logger.debug("[VALIDATE STORAGE-INT-ROUNDTRIP] read %s:%s with whole numbers as int", coll, rid)
 
         # Timestamp conversion
         creation_date = proto.created_at.ToDatetime() if proto.HasField("created_at") else None
@@ -158,6 +163,34 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             update_date=update_date,
             storage_id=proto.storage_id,
         )
+
+    @staticmethod
+    def _from_struct_value(value: Value) -> Any:
+        """Convert one ``google.protobuf.Value`` of a record payload to Python.
+
+        Struct stores every number as a double, so ``MessageToDict`` turned a stored ``1`` into ``1.0``.
+        A whole number within 2**53 (where a double still holds every integer exactly) reads back as int.
+
+        Args:
+            value: The protobuf value.
+
+        Returns:
+            The Python value: dict, list, str, bool, int, float or None.
+        """
+        match value.WhichOneof("kind"):
+            case "number_value":
+                number = value.number_value
+                return int(number) if number.is_integer() and abs(number) <= 2**53 else number
+            case "string_value":
+                return value.string_value
+            case "bool_value":
+                return value.bool_value
+            case "struct_value":
+                return {k: GrpcStorage._from_struct_value(v) for k, v in value.struct_value.fields.items()}
+            case "list_value":
+                return [GrpcStorage._from_struct_value(v) for v in value.list_value.values]
+            case _:
+                return None
 
     def _raise_on_outcome_error(self, result: storage_messages_pb2.StorageResult) -> None:
         """Raise when a single-item ``StorageResult`` holds an ``OperationError``.

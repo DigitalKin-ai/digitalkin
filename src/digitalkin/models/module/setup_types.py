@@ -6,7 +6,7 @@ import types
 import typing
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolCache, ToolModuleInfo
@@ -92,6 +92,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         extra_bases = tuple(b for b in cls.__bases__ if b is not SetupModel)
         base: type | tuple[type, ...] = (SetupModel, *extra_bases) if extra_bases else SetupModel
 
+        validators = cls._own_validators(clean_fields)
+
         m: type[SetupModel] = create_model(
             f"{cls.__name__}",
             __base__=base,
@@ -99,6 +101,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 arbitrary_types_allowed=True,
                 json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
             ),
+            __validators__=validators or None,
             **clean_fields,
         )
 
@@ -110,6 +113,50 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             cls._clean_model_cache[cache_key] = m
 
         return cast("type[SetupModelT]", m)
+
+    @classmethod
+    def _own_validators(cls, clean_fields: dict[str, Any]) -> dict[str, Any]:
+        """Re-apply the setup class's own validators to the clean model, which does not inherit from it.
+
+        A field validator keeps only the fields that survive the filter; with none left it cannot apply
+        and is dropped (and logged). Validators of the other bases are inherited through ``extra_bases``.
+
+        Args:
+            clean_fields: Fields kept in the clean model.
+
+        Returns:
+            Validators by name, for ``create_model(__validators__=...)``.
+        """
+        own = vars(cls)
+        decorators = cls.__pydantic_decorators__
+        validators: dict[str, Any] = {}
+        for name, field_dec in decorators.field_validators.items():
+            if name not in own:
+                continue
+            kept = tuple(f for f in field_dec.info.fields if f == "*" or f in clean_fields)
+            if not kept:
+                logger.info(
+                    "Setup validator %s.%s dropped from the clean model: its fields %s are filtered out",
+                    cls.__name__,
+                    name,
+                    field_dec.info.fields,
+                )
+                continue
+            validators[name] = field_validator(
+                *kept,
+                mode=field_dec.info.mode,  # type: ignore[arg-type]  # overloads split the modes the info holds
+                check_fields=field_dec.info.check_fields,
+                json_schema_input_type=field_dec.info.json_schema_input_type,
+            )(own[name])
+        for name, model_dec in decorators.model_validators.items():
+            if name in own:
+                validators[name] = model_validator(mode=model_dec.info.mode)(own[name])
+        if validators:
+            # TODO(validate): SETUP-VALIDATORS a setup class's own validators run on the clean (runtime) model
+            logger.debug(
+                "[VALIDATE SETUP-VALIDATORS] %s clean model keeps validators %s", cls.__name__, list(validators)
+            )
+        return validators
 
     @classmethod
     def clear_clean_model_cache(cls) -> None:

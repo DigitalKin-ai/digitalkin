@@ -2363,3 +2363,53 @@ class TestListLimitCapLog:
 
         assert client.exec_grpc_query.await_args.args[1].pagination.limit == 100
         assert not any("capped" in str(call.args[0]) for call in log.warning.call_args_list)
+
+
+class FreeformDataModel(BaseModel, extra="allow"):
+    """Untyped payload, like a tool storing arbitrary JSON."""
+
+
+class TestPayloadNumbers:
+    """Struct stores every number as a double: whole numbers must read back as ``int``."""
+
+    @pytest.fixture
+    def freeform_client(self, dummy_client_config: ClientConfig) -> GrpcStorage:
+        """GrpcStorage whose ``freeform`` collection keeps the payload as read.
+
+        Returns:
+            The client.
+        """
+        return GrpcStorage(MISSION_ID, SETUP_ID, SETUP_VERSION_ID, {"freeform": FreeformDataModel}, dummy_client_config)
+
+    def _read(self, client: GrpcStorage, payload: dict) -> dict:
+        struct = Struct()
+        struct.update(payload)
+        proto = storage_messages_pb2.StorageRecord(
+            context=MISSION_ID, collection="freeform", record_id="r", data=struct, data_type=storage_enums_pb2.OUTPUT
+        )
+        return client._build_record_from_proto(proto).data.model_dump()
+
+    @pytest.mark.unit
+    @pytest.mark.regression
+    def test_whole_numbers_read_back_as_int(self, freeform_client: GrpcStorage) -> None:
+        data = self._read(freeform_client, {"items": [1, 2, 3], "n": -4, "nested": {"rows": [{"x": 10}]}})
+
+        assert data == {"items": [1, 2, 3], "n": -4, "nested": {"rows": [{"x": 10}]}}
+        assert all(type(v) is int for v in [*data["items"], data["n"], data["nested"]["rows"][0]["x"]])
+
+    @pytest.mark.unit
+    def test_other_values_are_unchanged(self, freeform_client: GrpcStorage) -> None:
+        data = self._read(freeform_client, {"ratio": 1.5, "flag": True, "none": None, "s": "a", "empty": {}, "l": []})
+
+        assert data == {"ratio": 1.5, "flag": True, "none": None, "s": "a", "empty": {}, "l": []}
+        assert type(data["flag"]) is bool
+
+    @pytest.mark.unit
+    @pytest.mark.edge_case
+    def test_numbers_beyond_double_precision_stay_float(self, freeform_client: GrpcStorage) -> None:
+        """Above 2**53 a double no longer holds every integer exactly: keep the float rather than invent digits."""
+        data = self._read(freeform_client, {"big": float(2**60), "limit": float(2**53)})
+
+        assert type(data["big"]) is float
+        assert data["limit"] == 2**53
+        assert type(data["limit"]) is int
