@@ -81,6 +81,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             True if the server responded SERVING, False otherwise.
         """
+        if self._channel is None:
+            return False
         health_stub = health_pb2_grpc.HealthStub(self._channel)
         try:
             response = await health_stub.Check(  # type: ignore[attr-defined]  # grpc_health generated stub lacks typed Check
