@@ -496,7 +496,8 @@ class LiteLLMRegistry:
         Returns:
             ``(group, deployment_id)``; None for what the response does not carry.
         """
-        hidden = response.hidden_params if isinstance(response, ModelResponseBase) else None
+        # ``_hidden_params``, not the ``hidden_params`` property: litellm before 1.10x has no property.
+        hidden = response._hidden_params if isinstance(response, ModelResponseBase) else None  # ruff: ignore[private-member-access]
         headers = hidden.get("additional_headers") if isinstance(hidden, dict) else None
         if not isinstance(headers, dict):
             return None, None

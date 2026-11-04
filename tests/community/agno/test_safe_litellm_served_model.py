@@ -135,3 +135,25 @@ class TestCompletionServedModel:
 
     def test_no_proxy_headers_reports_nothing(self):
         assert _model()._parse_provider_response(_completion({})).provider_data is None
+
+
+class _StreamWithoutProperty(ModelResponseStream):
+    """A chunk as litellm before the ``hidden_params`` property (1.88) builds it."""
+
+    @property
+    def hidden_params(self) -> dict:  # type: ignore[override]
+        raise AttributeError("hidden_params")
+
+
+def test_served_model_reads_chunks_of_litellm_without_the_hidden_params_property():
+    """Regression: reading the public property crashed every streamed run on litellm 1.88."""
+    chunk = _StreamWithoutProperty(
+        id=_stream_id(),
+        model="claude-opus-4-5",
+        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ans"))],
+    )
+    chunk._hidden_params = _headers("claude-sonnet-4.5", "1")
+
+    parsed = _model()._parse_provider_response_delta(chunk)
+
+    assert parsed.provider_data == {_KEY: {"name": "claude-sonnet-4.5", "requested_name": "claude-opus-4-5"}}

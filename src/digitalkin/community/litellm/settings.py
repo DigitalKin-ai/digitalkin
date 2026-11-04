@@ -26,8 +26,7 @@ class LiteLLMSettings(BaseSettings):
     )
     prompt_cache_ttl: Literal["", "5m", "1h"] = Field(
         default="",
-        description="Anthropic prompt-cache TTL on the cache markers; empty keeps the provider's 5 minutes.",
-        json_schema_extra={"env_example": "1h"},
+        description="Anthropic prompt-cache TTL on the cache markers (1h); empty keeps the provider's 5 minutes.",
     )
 
 
