@@ -256,12 +256,12 @@ class ModuleServer(BaseServer):
             )
             raise RuntimeError(msg)
 
-        advertise_address = get_server_settings().channel.advertise_host or get_server_settings().channel.host
+        advertise_address, advertise_port = get_server_settings().channel.advertise_address
 
         logger.info(
             "Registering module with registry at %s:%d version=%s module_id=%s",
             advertise_address,
-            get_server_settings().channel.port,
+            advertise_port,
             version,
             module_id,
         )
@@ -269,7 +269,7 @@ class ModuleServer(BaseServer):
         result = await self.registry.register(
             module_id=module_id,
             address=advertise_address,
-            port=get_server_settings().channel.port,
+            port=advertise_port,
             version=version,
             module_type=self.module_class.registry_type,
             documentation=self.module_class.build_registry_documentation(),
@@ -283,7 +283,7 @@ class ModuleServer(BaseServer):
         logger.info(
             "Module registered successfully at %s:%d module_id=%s",
             advertise_address,
-            get_server_settings().channel.port,
+            advertise_port,
             result.module_id,
         )
 

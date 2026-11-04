@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from typing import Any, ClassVar
 
 import httpx
+from litellm.types.utils import ModelResponseBase
 from pydantic import BaseModel, Field
 
 from digitalkin.community.litellm.model_specs import (
@@ -327,6 +328,10 @@ class LiteLLMRegistry:
         self._config = config or LiteLLMConfig()
         self._client = LiteLLMClient(self._config)
         self._models: dict[str, ModelSpec] = {}
+        # Deployment id (``model_info.id``) -> model group, for every row of every ``/model/info``
+        # read: a streamed response names its deployment only (``x-litellm-model-id``), the group
+        # header being absent from proxy streams before litellm 1.88.
+        self._deployment_groups: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -374,12 +379,18 @@ class LiteLLMRegistry:
                 return
             if not model_name and self._initialized:
                 return
+            rows = await self._client.fetch_raw_models()
+            self._remember_deployments(rows)
             if model_name:
                 logger.info("Loading model '%s'", model_name)
-                self._parse_model(await self._client.fetch_model(model_name), strict=True)
+                row = next((r for r in rows if r.get("model_name") == model_name), None)
+                if row is None:
+                    msg = f"Model '{model_name}' not found in LiteLLM"
+                    raise ValueError(msg)
+                self._parse_model(row, strict=True)
             else:
                 logger.info("Loading all models")
-                for model_data in await self._client.fetch_raw_models():
+                for model_data in rows:
                     self._parse_model(model_data, strict=False)
                 self._initialized = True
             logger.info("LiteLLM registry now holds %d models", len(self._models))
@@ -398,7 +409,9 @@ class LiteLLMRegistry:
             if not wanted:
                 return
             logger.info("Loading %d models from LiteLLM: %s", len(wanted), sorted(wanted))
-            for model_data in await self._client.fetch_raw_models():
+            rows = await self._client.fetch_raw_models()
+            self._remember_deployments(rows)
+            for model_data in rows:
                 row_name = model_data.get("model_name")
                 if isinstance(row_name, str) and row_name in wanted:
                     self._parse_model(model_data, strict=True)
@@ -446,6 +459,52 @@ class LiteLLMRegistry:
             msg = f"Model '{name}' not in registry. Call 'await registry.initialize_many([{name!r}, ...])' first."
             raise ValueError(msg)
         return model
+
+    def _remember_deployments(self, rows: list[dict[str, Any]]) -> None:
+        """Record the model group of every deployment of a ``/model/info`` read.
+
+        Args:
+            rows: Raw ``/model/info`` entries.
+        """
+        for row in rows:
+            info = row.get("model_info")
+            deployment = info.get("id") if isinstance(info, dict) else None
+            group = row.get("model_name")
+            if isinstance(deployment, str) and deployment and isinstance(group, str) and group:
+                self._deployment_groups[deployment] = group
+
+    def deployment_group(self, deployment_id: str) -> str | None:
+        """Model group a proxy deployment belongs to.
+
+        Args:
+            deployment_id: The ``model_info.id`` the proxy returns as ``x-litellm-model-id``.
+
+        Returns:
+            The group name, or None for a deployment no ``/model/info`` read has listed.
+        """
+        return self._deployment_groups.get(deployment_id)
+
+    def served_route(self, response: Any) -> tuple[str | None, str | None]:
+        """The proxy model group and deployment that answered a call, from its response headers.
+
+        litellm keeps the proxy headers, ``llm_provider-`` prefixed, in ``_hidden_params``. A stream
+        from a proxy before litellm 1.88 names only its deployment; the group is then resolved here.
+
+        Args:
+            response: A litellm completion or streaming chunk.
+
+        Returns:
+            ``(group, deployment_id)``; None for what the response does not carry.
+        """
+        hidden = response.hidden_params if isinstance(response, ModelResponseBase) else None
+        headers = hidden.get("additional_headers") if isinstance(hidden, dict) else None
+        if not isinstance(headers, dict):
+            return None, None
+        deployment = headers.get("llm_provider-x-litellm-model-id") or None
+        group = headers.get("llm_provider-x-litellm-model-group") or (
+            self._deployment_groups.get(deployment) if deployment else None
+        )
+        return group, deployment
 
     def try_get(self, name: str) -> ModelSpec | None:
         """Return a loaded model, or None.

@@ -11,6 +11,7 @@ import uuid
 from litellm.types.utils import Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices, Usage
 
 from digitalkin.community.agno.safe_litellm import SafeLiteLLM
+from digitalkin.community.litellm.registry import LiteLLMRegistry
 from digitalkin.models.events import ModelInfo
 
 _KEY = ModelInfo.PROVIDER_DATA_KEY
@@ -92,10 +93,37 @@ class TestStreamedServedModel:
 
         assert parsed.provider_data is None
 
-    def test_unparsable_fallback_count_is_no_fallback(self):
+    def test_fallback_detected_without_the_fallback_count(self):
+        """A served group other than the requested one is a fallback, whatever the count header says."""
         parsed = _model()._parse_provider_response_delta(_chunk(_stream_id(), _headers("claude-sonnet-4.5", "n/a")))
 
-        assert parsed.provider_data == {_KEY: {"name": "claude-sonnet-4.5", "requested_name": None}}
+        assert parsed.provider_data == {_KEY: {"name": "claude-sonnet-4.5", "requested_name": "claude-opus-4-5"}}
+
+    def test_stream_without_group_header_resolves_the_deployment(self, monkeypatch):
+        """Proxies before litellm 1.88 send only x-litellm-model-id on a stream."""
+        registry = LiteLLMRegistry.__new__(LiteLLMRegistry)
+        registry._deployment_groups = {}
+        registry._remember_deployments(
+            [
+                {"model_name": "claude-opus-4-5", "model_info": {"id": "dep-opus"}},
+                {"model_name": "claude-sonnet-4.5", "model_info": {"id": "dep-sonnet"}},
+            ]
+        )
+        monkeypatch.setattr(LiteLLMRegistry, "shared", classmethod(lambda cls: registry))
+
+        fell_back = _model()._parse_provider_response_delta(
+            _chunk(_stream_id(), {"additional_headers": {"llm_provider-x-litellm-model-id": "dep-sonnet"}})
+        )
+        direct = _model()._parse_provider_response_delta(
+            _chunk(_stream_id(), {"additional_headers": {"llm_provider-x-litellm-model-id": "dep-opus"}})
+        )
+        unknown = _model()._parse_provider_response_delta(
+            _chunk(_stream_id(), {"additional_headers": {"llm_provider-x-litellm-model-id": "dep-unknown"}})
+        )
+
+        assert fell_back.provider_data == {_KEY: {"name": "claude-sonnet-4.5", "requested_name": "claude-opus-4-5"}}
+        assert direct.provider_data == {_KEY: {"name": "claude-opus-4-5", "requested_name": None}}
+        assert unknown.provider_data is None
 
 
 class TestCompletionServedModel:

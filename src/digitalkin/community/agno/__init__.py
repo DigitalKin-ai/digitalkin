@@ -30,6 +30,7 @@ therefore NOT exported here; import them directly::
         StorageDb,
     )
     from digitalkin.community.agno.compaction import (
+        ContextSize,
         DkCompaction,
         HistoryCompactor,
         TokenCalibration,
@@ -41,7 +42,7 @@ therefore NOT exported here; import them directly::
 - ``CancelGuard`` — tool hook refusing tool calls once the task is cancelled.
 - ``StorageDb`` (+ ``AgnoSession``, ``AgnoCompaction``, ``AGNO_STORAGE_CONFIG``) — Agno
   session storage over the module's StorageStrategy.
-- ``HistoryCompactor``, ``DkCompaction``, ``TokenCalibration`` — chat history compaction.
+- ``HistoryCompactor``, ``DkCompaction``, ``TokenCalibration``, ``ContextSize`` — chat history compaction.
 - ``SafeLiteLLM`` — Agno LiteLLM model routed through the LiteLLM proxy.
 
 Default agent toolkits (``ChatHistoryTools``, ``UserProfileTools``, the registry

@@ -12,10 +12,12 @@ from agno.exceptions import RunCancelledException
 from agno.media import Image
 from agno.models.litellm import LiteLLM
 from agno.models.message import Message
+from agno.metrics import MessageMetrics
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
 from digitalkin.community.agno.safe_litellm import SafeLiteLLM
+from digitalkin.models.events import ModelInfo
 
 EMPTY_RESPONSE_NOTICE = SafeLiteLLM.empty_response_notice
 
@@ -860,6 +862,7 @@ class _FakeCompactor:
         self.views: list[list[Message]] = []
         self.forced: list[list[Message]] = []
         self.observed: list[int] = []
+        self.calibrated: list[bool] = []
 
     async def view(self, messages: list[Message], tools: object = None, run_response: object = None) -> list[Message]:
         self.views.append(messages)
@@ -871,8 +874,9 @@ class _FakeCompactor:
         self.forced.append(messages)
         return [Message(role="user", content="REFOLDED VIEW"), *messages[-1:]] if self.refit else None
 
-    async def observe(self, sent: list[Message], tools: object, provider_tokens: int) -> None:
+    async def observe(self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True) -> None:
         self.observed.append(provider_tokens)
+        self.calibrated.append(calibrate)
 
 
 def _overflow() -> litellm.ContextWindowExceededError:
@@ -1059,6 +1063,23 @@ class TestTokenCalibration:
             pass
 
         assert compactor.observed == [12_345]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("served", "calibrate"),
+        [
+            ({"name": "claude-sonnet-5", "requested_name": None}, True),
+            ({"name": "gpt-5", "requested_name": "claude-sonnet-5"}, False),
+        ],
+    )
+    async def test_a_fallback_count_is_kept_but_not_calibrated_on(self, served: dict, calibrate: bool) -> None:
+        compactor = _FakeCompactor()
+        model = _model_with(_FakeClient(_completion("Done")), compactor=compactor)
+
+        await model._observe([], {}, MessageMetrics(input_tokens=700_000), {ModelInfo.PROVIDER_DATA_KEY: served})
+
+        assert compactor.observed == [700_000], "every count reaches the mid-run fold"
+        assert compactor.calibrated == [calibrate]
 
     @pytest.mark.asyncio
     async def test_no_usage_no_calibration(self) -> None:

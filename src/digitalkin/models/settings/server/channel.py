@@ -14,6 +14,7 @@ class ServerChannelSettings(BaseChannelSettings):
 
     Attributes:
         advertise_host (str | None): Public hostname/IP sent to registry for discovery. Falls back to host if not set.
+        advertise_port (int | None): Public port sent to registry for discovery. Falls back to port if not set.
         database_url (str | None): Database URL for registry data storage
 
     """
@@ -36,7 +37,24 @@ class ServerChannelSettings(BaseChannelSettings):
         json_schema_extra={"env_required": True, "env_example": "digitalkin-module-host"},
     )
 
+    advertise_port: NonNegativeInt | None = Field(
+        default=None,
+        description=(
+            "Public port sent to registry for discovery, when it differs from the listening port (a TCP "
+            "tunnel or a NAT in front of the module). Falls back to port if not set."
+        ),
+    )
+
     database_url: str | None = Field(default=None, description="Database URL for registry data storage")
+
+    @property
+    def advertise_address(self) -> tuple[str, int]:
+        """``(host, port)`` the module announces: the advertised values, else the listening ones.
+
+        Returns:
+            The public host and port the registry and dial-back callers should reach.
+        """
+        return self.advertise_host or self.host, self.advertise_port or self.port
 
     def __init__(self, **values: Any) -> None:
         """Initialize ServerChannelSettings with default credentials if not provided."""
