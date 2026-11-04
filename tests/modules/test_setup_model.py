@@ -3,7 +3,7 @@
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from digitalkin.models.module.module_types import SetupModel
 from digitalkin.models.module.tool_reference import tool_reference_input
@@ -221,6 +221,67 @@ class TestSetupModelGetCleanModel:
         assert field_info.default == "default_value"
         assert field_info.title == "My Field"
         assert field_info.description == "A test field"
+
+
+class TestCleanModelKeepsValidators:
+    """The clean model is what a module receives at runtime: the setup class's validators must still run."""
+
+    @staticmethod
+    def _setup_class() -> type[SetupModel]:
+        class LegacySetup(SetupModel):
+            mode: str = Field(default="local")
+            low: int = Field(default=0)
+            high: int = Field(default=10)
+            secret: str = Field(default="s", json_schema_extra={"config": True})
+
+            @field_validator("mode", mode="before")
+            @classmethod
+            def _legacy_mode(cls, value: object) -> object:
+                return "local" if value == "rest" else value
+
+            @field_validator("secret")
+            @classmethod
+            def _upper_secret(cls, value: str) -> str:
+                return value.upper()
+
+            @model_validator(mode="after")
+            def _ordered(self) -> "LegacySetup":
+                if self.low > self.high:
+                    msg = "low must be <= high"
+                    raise ValueError(msg)
+                return self
+
+        return LegacySetup
+
+    @pytest.mark.regression
+    async def test_field_validator_runs_on_the_clean_model(self) -> None:
+        model = await self._setup_class().get_clean_model(config_fields=False, hidden_fields=True)
+
+        assert model(mode="rest").mode == "local"
+
+    @pytest.mark.regression
+    async def test_model_validator_runs_on_the_clean_model(self) -> None:
+        model = await self._setup_class().get_clean_model(config_fields=False, hidden_fields=True)
+
+        with pytest.raises(ValidationError, match="low must be <= high"):
+            model(low=5, high=1)
+
+    @pytest.mark.edge_case
+    async def test_validator_of_an_excluded_field_is_dropped_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A validator whose fields are all filtered out cannot apply; it must not break the model build."""
+        setup = self._setup_class()
+
+        with caplog.at_level("INFO"):
+            model = await setup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+
+        assert "secret" not in model.model_fields
+        assert model(mode="rest").mode == "local"
+        assert "_upper_secret" in caplog.text
+
+    async def test_validator_of_a_kept_config_field_runs(self) -> None:
+        model = await self._setup_class().get_clean_model(config_fields=True, hidden_fields=True)
+
+        assert model(secret="abc").secret == "ABC"
 
 
 class TestSetupModelSchema:

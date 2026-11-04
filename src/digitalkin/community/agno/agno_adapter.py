@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from agno.run.agent import ReasoningStepEvent as _AgentReasoningStep
     from agno.run.agent import RunCompletedEvent as _AgentRunCompleted
     from agno.run.agent import RunContentEvent as _AgentRunContent
+    from agno.run.agent import RunContinuedEvent as _AgentRunContinued
     from agno.run.agent import RunErrorEvent as _AgentRunError
     from agno.run.agent import RunPausedEvent as _AgentRunPaused
     from agno.run.agent import RunStartedEvent as _AgentRunStarted
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from agno.run.team import ReasoningStepEvent as _TeamReasoningStep
     from agno.run.team import RunCompletedEvent as _TeamRunCompleted
     from agno.run.team import RunContentEvent as _TeamRunContent
+    from agno.run.team import RunContinuedEvent as _TeamRunContinued
     from agno.run.team import RunErrorEvent as _TeamRunError
     from agno.run.team import RunPausedEvent as _TeamRunPaused
     from agno.run.team import RunStartedEvent as _TeamRunStarted
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
     AgnoRunCompletedEvent: TypeAlias = _AgentRunCompleted | _TeamRunCompleted
     AgnoRunErrorEvent: TypeAlias = _AgentRunError | _TeamRunError
     AgnoRunPausedEvent: TypeAlias = _AgentRunPaused | _TeamRunPaused
+    AgnoRunContinuedEvent: TypeAlias = _AgentRunContinued | _TeamRunContinued
     AgnoReasoningStartedEvent: TypeAlias = _AgentReasoningStarted | _TeamReasoningStarted
     AgnoReasoningContentDeltaEvent: TypeAlias = _AgentReasoningContentDelta | _TeamReasoningContentDelta
     AgnoReasoningStepEvent: TypeAlias = _AgentReasoningStep | _TeamReasoningStep
@@ -81,6 +84,11 @@ from digitalkin.models.events import (
 logger = logging.getLogger(__name__)
 
 
+# Agno closes a delegation with this text when its member pauses, and swaps in the real result
+# only inside its own run on continue: the stream never carries a correction.
+_MEMBER_PAUSE_MARKER = "requires human input"
+
+
 class AgnoStreamAdapter:
     """Stateful Agno→DigitalKin event converter.
 
@@ -113,6 +121,9 @@ class AgnoStreamAdapter:
         # ``subagent_run_id`` every event that child produces carries. Value is its display
         # name and the metadata of the event that opened it.
         self._subagents: dict[str, tuple[str, dict[str, Any] | None]] = {}
+        # Delegations closed on a member's pause, kept off the wire until their members are done.
+        self._held_delegations: list[ToolCallCompletedEvent] = []
+        self._held_results: list[str] = []
 
         self._is_paused: bool = False
         self._paused_tool_executions: list[Any] = []
@@ -138,6 +149,16 @@ class AgnoStreamAdapter:
     def paused_requirements(self) -> list[Any]:
         """Agno ``RunRequirement`` objects carried by the paused run."""
         return list(self._paused_requirements)
+
+    def resume(self) -> None:
+        """Forget the pause: the same stream goes on, as when a load is resolved in-process.
+
+        Open delegations stay open across the continue, so a pause nobody outside the run ever
+        waited on leaves no trace on the wire. Call before :meth:`flush`, which would close them.
+        """
+        self._is_paused = False
+        self._paused_tool_executions = []
+        self._paused_requirements = []
 
     def _subagent_of(self, run_key: str) -> str | None:
         """The delegation that owns a run, or None when the top-level agent does.
@@ -211,6 +232,7 @@ class AgnoStreamAdapter:
             "run_completed": self._handle_run_completed,
             "run_error": self._handle_run_error,
             "run_paused": self._handle_run_paused,
+            "run_continued": self._handle_run_continued,
             "reasoning_started": self._handle_reasoning_started,
             "reasoning_content_delta": self._handle_reasoning_content_delta,
             "reasoning_step": self._handle_reasoning_step,
@@ -287,35 +309,7 @@ class AgnoStreamAdapter:
                 logger.info("[agno-adapter] DROP nested run_started without run_id parent_run_id=%s", parent_run_id)
                 return []
 
-            # Close the parent's own sequences so its bubble does not stay open across the
-            # delegation. Only the parent's — a sibling member may be mid-stream, and closing
-            # its message here would truncate it.
-            events: list[BaseAgentRunEvent] = self._close_content(parent_run_id, timestamp)
-            events.extend(self._close_reasoning(parent_run_id, timestamp))
-
-            # Attribution is by id, so the name is a plain label — no need to disambiguate
-            # members that share one, as the step-based scheme required.
-            name = (self._last_metadata or {}).get("name") or "member"
-            self._subagents[run_id] = (name, self._last_metadata)
-
-            logger.info(
-                "[agno-adapter] SUBAGENT_STARTED name=%s subagent_run_id=%s parent_run_id=%s",
-                name,
-                run_id,
-                parent_run_id,
-            )
-            events.append(
-                SubagentStartedEvent(
-                    event=AgentRunEvent.SUBAGENT_STARTED,
-                    subagent_run_id=run_id,
-                    name=name,
-                    # A member of a team that is itself a member: the parent delegation owns it.
-                    parent_subagent_run_id=parent_run_id if parent_run_id in self._subagents else None,
-                    timestamp=timestamp,
-                    metadata=self._last_metadata,
-                )
-            )
-            return events
+            return self._open_subagent(run_id, parent_run_id, timestamp)
 
         if run_id and run_id == self._active_run_id:
             logger.info("[agno-adapter] DROP duplicate run_started run_id=%s", run_id)
@@ -349,6 +343,63 @@ class AgnoStreamAdapter:
                 metadata=self._last_metadata,
             )
         ]
+
+    def _open_subagent(self, run_id: str, parent_run_id: str, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Announce a delegation, and close its parent's bubble so its content lands apart.
+
+        Args:
+            run_id: The child's run id, which every event it produces carries.
+            parent_run_id: The run that delegated.
+            timestamp: Timestamp to stamp on the events.
+
+        Returns:
+            Any closing events, then a SubagentStartedEvent.
+        """
+        # Close the parent's own sequences so its bubble does not stay open across the
+        # delegation. Only the parent's — a sibling member may be mid-stream, and closing
+        # its message here would truncate it.
+        events: list[BaseAgentRunEvent] = self._close_content(parent_run_id, timestamp)
+        events.extend(self._close_reasoning(parent_run_id, timestamp))
+
+        # Attribution is by id, so the name is a plain label — no need to disambiguate
+        # members that share one, as the step-based scheme required.
+        name = (self._last_metadata or {}).get("name") or "member"
+        self._subagents[run_id] = (name, self._last_metadata)
+
+        logger.info(
+            "[agno-adapter] SUBAGENT_STARTED name=%s subagent_run_id=%s parent_run_id=%s",
+            name,
+            run_id,
+            parent_run_id,
+        )
+        events.append(
+            SubagentStartedEvent(
+                event=AgentRunEvent.SUBAGENT_STARTED,
+                subagent_run_id=run_id,
+                name=name,
+                # A member of a team that is itself a member: the parent delegation owns it.
+                parent_subagent_run_id=parent_run_id if parent_run_id in self._subagents else None,
+                timestamp=timestamp,
+                metadata=self._last_metadata,
+            )
+        )
+        return events
+
+    def _handle_run_continued(self, agno_event: AgnoRunContinuedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Handle RunEvent.run_continued: a member picking up where a pause left it.
+
+        Resuming after the user answered is a new stream, so the delegation closed as
+        ``suspended`` opens again under the same id. A continue within the stream finds it still
+        open. The top-level run has its RUN_STARTED from the runner.
+
+        Returns:
+            The delegation's opening events, or empty when there is nothing to reopen.
+        """
+        parent_run_id = agno_event.parent_run_id
+        run_id = agno_event.run_id
+        if not parent_run_id or not run_id or run_id in self._subagents:
+            return []
+        return self._open_subagent(run_id, parent_run_id, timestamp)
 
     def _handle_run_completed(self, agno_event: AgnoRunCompletedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_completed.
@@ -385,6 +436,10 @@ class AgnoStreamAdapter:
                         metadata=subagent[1],
                     )
                 )
+                if self._held_delegations and content:
+                    self._held_results.append(str(content))
+                if not self._subagents:
+                    events.extend(self._release_held_delegations(timestamp))
             logger.info(
                 "[agno-adapter] SUBAGENT_FINISHED name=%s subagent_run_id=%s parent_run_id=%s closed=%d",
                 subagent[0] if subagent else None,
@@ -410,6 +465,7 @@ class AgnoStreamAdapter:
         events.extend(self._close_all_content(timestamp))
         events.extend(self._close_all_reasoning(timestamp))
         events.extend(self._close_tool_calls(timestamp, None))
+        events.extend(self._release_held_delegations(timestamp))
         events.extend(self._close_subagents(timestamp))
 
         if run_id:
@@ -457,6 +513,8 @@ class AgnoStreamAdapter:
                     metadata=subagent[1],
                 )
             )
+            if not self._subagents:
+                events.extend(self._release_held_delegations(timestamp))
             return events
 
         # An error ends the stream: leave nothing half-open, or the client renders as many
@@ -474,6 +532,8 @@ class AgnoStreamAdapter:
             )
             self._subagents.clear()
             self._open_tool_calls.clear()
+        self._held_delegations.clear()
+        self._held_results.clear()
         events.append(
             RunErrorEvent(
                 event=AgentRunEvent.RUN_ERROR,
@@ -737,16 +797,20 @@ class AgnoStreamAdapter:
                     metadata=self._last_metadata,
                 )
             ]
-        return [
-            ToolCallCompletedEvent(
-                event=AgentRunEvent.TOOL_CALL_COMPLETED,
-                tool=tool_info,
-                content=str(content) if content else None,
-                subagent_run_id=self._subagent_of(self._run_key),
-                timestamp=timestamp,
-                metadata=self._last_metadata,
-            )
-        ]
+        completed = ToolCallCompletedEvent(
+            event=AgentRunEvent.TOOL_CALL_COMPLETED,
+            tool=tool_info,
+            content=str(content) if content else None,
+            subagent_run_id=self._subagent_of(self._run_key),
+            timestamp=timestamp,
+            metadata=self._last_metadata,
+        )
+        if self._is_paused and tool is not None and _MEMBER_PAUSE_MARKER in str(tool.result or "").lower():
+            # Whether anyone is really waiting is only known later: the runner may resolve the
+            # pause itself. Same order as any delegation then: the member finishes, the call closes.
+            self._held_delegations.append(completed)
+            return []
+        return [completed]
 
     def _handle_run_paused(self, agno_event: AgnoRunPausedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle ``RunEvent.run_paused`` — HITL pause on external tool execution.
@@ -758,9 +822,16 @@ class AgnoStreamAdapter:
         Returns:
             Synthesized tool-call events for the paused external tools.
         """
-        # A pause suspends the whole stream, so close every run's sequences, not just this one's.
-        events: list[BaseAgentRunEvent] = self._close_all_reasoning(timestamp)
-        events.extend(self._close_all_content(timestamp))
+        # A member's pause reaches the team as a run_paused of its own, ahead of the team's, and
+        # only suspends that member: its siblings stream on and the delegation call stays open.
+        run_key = self._run_key if agno_event.parent_run_id else None
+        events: list[BaseAgentRunEvent]
+        if run_key is None:
+            events = self._close_all_reasoning(timestamp)
+            events.extend(self._close_all_content(timestamp))
+        else:
+            events = self._close_reasoning(run_key, timestamp)
+            events.extend(self._close_content(run_key, timestamp))
 
         tools = agno_event.tools or []
         requirements = agno_event.requirements or []
@@ -772,7 +843,9 @@ class AgnoStreamAdapter:
         # Only synthesize for external tools; server-side ones already streamed.
         seen_ids: set[str] = set()
         for tool_exec in tools:
-            if not tool_exec.external_execution_required:
+            # A resolved one is on the paused run too, when a member pauses again after the
+            # user answered: announcing it would ask the same question twice.
+            if not tool_exec.external_execution_required or tool_exec.result is not None:
                 continue
             tool_call_id = tool_exec.tool_call_id
             if not tool_call_id or tool_call_id in seen_ids:
@@ -806,10 +879,12 @@ class AgnoStreamAdapter:
                 tool_info.tool_name,
                 tool_call_id,
             )
+            subagent_run_id = self._subagent_of(self._run_key)
             events.extend((
                 ToolCallStartedEvent(
                     event=AgentRunEvent.TOOL_CALL_STARTED,
                     tool=tool_info,
+                    subagent_run_id=subagent_run_id,
                     timestamp=timestamp,
                     metadata=None,
                 ),
@@ -817,21 +892,13 @@ class AgnoStreamAdapter:
                     event=AgentRunEvent.TOOL_CALL_COMPLETED,
                     tool=tool_info,
                     content=None,
+                    subagent_run_id=subagent_run_id,
                     timestamp=timestamp,
                     metadata=None,
                 ),
             ))
         # Any other call still open cannot complete across the pause.
-        events.extend(self._close_tool_calls(timestamp, None))
-
-        # The stream ends here but each open delegation may continue under the same id on resume.
-        # TODO(validate): AGUI-SUBAGENT-SUSPENDED open subagents close as suspended on a HITL pause
-        if self._subagents:
-            logger.info(
-                "[VALIDATE AGUI-SUBAGENT-SUSPENDED] suspending on pause: %s",
-                [(run, name) for run, (name, _) in self._subagents.items()],
-            )
-        events.extend(self._close_subagents(timestamp, outcome="suspended"))
+        events.extend(self._close_tool_calls(timestamp, run_key))
         return events
 
     def _handle_tool_call_error(self, agno_event: AgnoToolCallErrorEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
@@ -875,6 +942,10 @@ class AgnoStreamAdapter:
     def flush(self) -> list[BaseAgentRunEvent]:
         """Emit closing events for any active sequences at end of stream.
 
+        A stream that ended paused closes its delegations as ``suspended``. Only the caller knows
+        whether a pause really goes out to the client: one it resolves itself goes through
+        :meth:`resume` instead, and never reaches this.
+
         Returns:
             List of closing events (empty if nothing is active).
         """
@@ -887,7 +958,44 @@ class AgnoStreamAdapter:
         events: list[BaseAgentRunEvent] = self._close_all_content(None)
         events.extend(self._close_all_reasoning(None))
         events.extend(self._close_tool_calls(None, None))
-        events.extend(self._close_subagents(None))
+        if self._is_paused:
+            # The pause goes out to the client: the marker is true, nothing replaces it.
+            events.extend(self._held_delegations)
+            self._held_delegations = []
+            self._held_results = []
+        events.extend(self._release_held_delegations(None))
+        # The stream ends here but each open delegation may continue under the same id on resume.
+        # TODO(validate): AGUI-SUBAGENT-SUSPENDED open subagents close as suspended on a HITL pause
+        if self._is_paused and self._subagents:
+            logger.info(
+                "[VALIDATE AGUI-SUBAGENT-SUSPENDED] suspending on pause: %s",
+                [(run, name) for run, (name, _) in self._subagents.items()],
+            )
+        events.extend(self._close_subagents(None, outcome="suspended" if self._is_paused else None))
+        return events
+
+    def _release_held_delegations(self, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close the delegations held across a pause, with what their members really returned.
+
+        Args:
+            timestamp: Timestamp to stamp on the closing events.
+
+        Returns:
+            One ToolCallCompletedEvent per held delegation, empty when none is held.
+        """
+        result = "\n\n".join(self._held_results) or None
+        events: list[BaseAgentRunEvent] = [
+            event.model_copy(
+                update={
+                    "tool": event.tool.model_copy(update={"result": result}) if event.tool else None,
+                    "content": result,
+                    "timestamp": timestamp,
+                }
+            )
+            for event in self._held_delegations
+        ]
+        self._held_delegations = []
+        self._held_results = []
         return events
 
     def _close_reasoning(self, run_key: str, timestamp: Any) -> list[BaseAgentRunEvent]:

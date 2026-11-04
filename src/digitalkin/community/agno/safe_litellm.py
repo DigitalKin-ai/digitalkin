@@ -33,7 +33,7 @@ from agno.exceptions import CheckTrigger, OutputCheckError, RunCancelledExceptio
 from agno.models.litellm import LiteLLM
 from agno.models.message import Citations, Message, UrlCitation
 from agno.models.response import ModelResponse
-from litellm.exceptions import ContextWindowExceededError
+from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.utils import trim_messages
 from openai import APIConnectionError, BadRequestError, InternalServerError
 from pydantic import BaseModel
@@ -546,7 +546,10 @@ class SafeLiteLLM(LiteLLM):
     async def _ainvoke_stream_once(
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
     ) -> AsyncIterator[ModelResponse]:
-        """Stream one request, retrying it once without images if the provider rejects them before output.
+        """Stream one request, resending it once if it fails before any output.
+
+        Resent without images when the provider rejects them, or unchanged when the connection to the
+        proxy drops before the first chunk (``num_retries`` only covers opening the stream).
 
         Args:
             messages: Agno messages to send.
@@ -561,6 +564,7 @@ class SafeLiteLLM(LiteLLM):
                 streamed, or the request is rejected again without images.
             APIConnectionError: Likewise, for a proxy 500 surfaced as a connection error.
             InternalServerError: Likewise, for a proxy 500.
+            MidStreamFallbackError: When the stream drops after output, or drops again.
         """
         self._raise_if_cancelled()
         streamed = False
@@ -568,6 +572,15 @@ class SafeLiteLLM(LiteLLM):
             async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
                 streamed = True
                 yield chunk
+        except MidStreamFallbackError as exc:
+            if streamed or not exc.is_pre_first_chunk:
+                raise
+            # TODO(validate): STREAM-DROP-RETRY a stream dropped before its first chunk is resent once
+            logger.warning(
+                "[VALIDATE STREAM-DROP-RETRY] Stream dropped before its first chunk, resending once (model=%s): %s",
+                self.id,
+                exc,
+            )
         except (BadRequestError, APIConnectionError, InternalServerError) as exc:
             if streamed or not self._should_retry_without_images(exc):
                 raise
@@ -748,11 +761,13 @@ class SafeLiteLLM(LiteLLM):
 
         # Kept above the compaction threshold so it only catches what a fold could not. Without an
         # input budget it relies on litellm's window for the model id: a no-op for an unknown one.
+        # The window is read here: trim_messages' own lookup raises, and swallows it, on a map
+        # entry without `max_tokens`, which leaves the prompt untrimmed.
+        spec = litellm.model_cost.get(self.id, {})
+        budget = self.input_tokens or spec.get("max_input_tokens") or spec.get("max_tokens")
         trimmed = cast(
             "list[dict[str, Any]]",
-            trim_messages(bounded, self.id, max_tokens=int(self.input_tokens * 0.95))
-            if self.input_tokens
-            else trim_messages(bounded, self.id, trim_ratio=0.95),
+            trim_messages(bounded, self.id, max_tokens=int(budget * 0.95)) if budget else bounded,
         )
         if len(trimmed) < len(bounded):
             logger.warning(

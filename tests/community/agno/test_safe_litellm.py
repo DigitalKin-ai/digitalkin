@@ -3,14 +3,16 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 
 import litellm
 import pytest
+from agno.exceptions import RunCancelledException
 from agno.media import Image
 from agno.models.litellm import LiteLLM
 from agno.models.message import Message
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
 from digitalkin.community.agno.safe_litellm import SafeLiteLLM
@@ -261,8 +263,9 @@ class TestContextWindowTrim:
     def tiny_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import litellm
 
-        spec = {**litellm.model_cost["claude-sonnet-4-6"], "max_input_tokens": 400}
-        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", spec)
+        # No `max_tokens`: litellm's published map dropped it and its own lookup raises without it.
+        spec = {k: v for k, v in litellm.model_cost["claude-sonnet-4-6"].items() if k != "max_tokens"}
+        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", {**spec, "max_input_tokens": 400})
 
     @staticmethod
     def _cached_tiny_model() -> SafeLiteLLM:
@@ -298,9 +301,21 @@ class TestContextWindowTrim:
         plain = _stock_model()._format_messages(self._long_conversation())
         marked = self._cached_tiny_model()._mark_cache_breakpoints(plain)
         with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-            untouched = trim_messages(marked, "claude-sonnet-4-6")
+            untouched = trim_messages(marked, "claude-sonnet-4-6", max_tokens=300)
         assert "token trimming" in caplog.text
         assert len(untouched) == len(marked)
+
+    def test_window_falls_back_to_max_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A map entry without `max_input_tokens` still bounds the prompt, as litellm's lookup did."""
+        import litellm
+
+        spec = {k: v for k, v in litellm.model_cost["claude-sonnet-4-6"].items() if k != "max_input_tokens"}
+        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", {**spec, "max_tokens": 400})
+        assert len(_safe_model()._format_messages(self._long_conversation())) < 21
+
+    def test_unknown_model_is_left_untouched(self) -> None:
+        model = SafeLiteLLM(id="not-in-the-map", append_trailing_user_message=False)
+        assert len(model._format_messages(self._long_conversation())) == 21
 
 
 class TestCancelToken:
@@ -988,10 +1003,11 @@ class TestHistoryCompaction:
             return messages
 
         monkeypatch.setattr(safe_mod, "trim_messages", fake_trim)
+        monkeypatch.setitem(safe_mod.litellm.model_cost, "claude-sonnet-4-6", {"max_input_tokens": 1000})
 
         _safe_model()._format_messages([Message(role="user", content="hi")])
 
-        assert calls == [{"trim_ratio": 0.95}]
+        assert calls == [{"max_tokens": 950}]
 
     def test_trim_fits_the_input_budget_when_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The proxy model group is unknown to litellm: the budget from the spec drives the trim."""
@@ -1052,3 +1068,104 @@ class TestTokenCalibration:
         )
 
         assert compactor.observed == []
+
+
+class TestStreamDropRetry:
+    """A stream the proxy drops before its first chunk is resent once; one that produced output is not."""
+
+    @staticmethod
+    def _drop(*, pre_first_chunk: bool) -> MidStreamFallbackError:
+        cause = litellm.APIConnectionError(message="Connection error.", llm_provider="openai", model="gpt-5")
+        return MidStreamFallbackError(
+            message=f"litellm.APIConnectionError: {cause}",
+            model="gpt-5",
+            llm_provider="openai",
+            original_exception=cause,
+            is_pre_first_chunk=pre_first_chunk,
+        )
+
+    @classmethod
+    def _dropped_stream(cls, *chunks: str, pre_first_chunk: bool) -> object:
+        drop = cls._drop(pre_first_chunk=pre_first_chunk)
+
+        class _Dropped:
+            def __iter__(self) -> Iterator[object]:
+                yield from _chunks(*chunks)
+                raise drop
+
+        return _Dropped()
+
+    @pytest.mark.regression
+    async def test_drop_before_the_first_chunk_is_resent_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = _FakeClient(self._dropped_stream(pre_first_chunk=True), _chunks("Recovered"))
+
+        with caplog.at_level(logging.WARNING):
+            chunks = [
+                c
+                async for c in _model_with(client).ainvoke_stream(
+                    [Message(role="user", content="hi")], Message(role="assistant")
+                )
+            ]
+
+        assert "".join(c.content or "" for c in chunks) == "Recovered"
+        assert len(client.requests) == 2
+        assert client.requests[0] == client.requests[1]
+        assert "[VALIDATE STREAM-DROP-RETRY]" in caplog.text
+
+    @pytest.mark.edge_case
+    async def test_a_second_drop_is_raised(self) -> None:
+        client = _FakeClient(self._dropped_stream(pre_first_chunk=True), self._dropped_stream(pre_first_chunk=True))
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in _model_with(client).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(client.requests) == 2
+
+    @pytest.mark.edge_case
+    async def test_drop_after_output_is_not_resent(self) -> None:
+        client = _FakeClient(self._dropped_stream("Partial", pre_first_chunk=False))
+        received: list[str] = []
+        stream = _model_with(client).ainvoke_stream([Message(role="user", content="hi")], Message(role="assistant"))
+
+        async def consume() -> None:
+            async for chunk in stream:
+                received.append(chunk.content or "")  # ruff: ignore[manual-list-comprehension]  # a comprehension drops what arrived before the raise
+
+        with pytest.raises(MidStreamFallbackError):
+            await consume()
+        assert received == ["Partial"]
+        assert len(client.requests) == 1
+
+    @pytest.mark.edge_case
+    async def test_drop_after_litellm_generated_content_is_not_resent(self) -> None:
+        """LiteLLM may have generated content it never yielded: its own flag decides, not ours alone."""
+        client = _FakeClient(self._dropped_stream(pre_first_chunk=False), _chunks("Unexpected"))
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in _model_with(client).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(client.requests) == 1
+
+    @pytest.mark.edge_case
+    async def test_cancel_after_the_drop_refuses_the_resend(self) -> None:
+        cancel = asyncio.Event()
+        drop = self._drop(pre_first_chunk=True)
+
+        class _DropThenCancel:
+            def __iter__(self) -> Iterator[object]:
+                cancel.set()
+                raise drop
+                yield  # pragma: no cover
+
+        client = _FakeClient(_DropThenCancel(), _chunks("Unexpected"))
+
+        with pytest.raises(RunCancelledException):
+            async for _ in _model_with(client, cancel_event=cancel).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(client.requests) == 1

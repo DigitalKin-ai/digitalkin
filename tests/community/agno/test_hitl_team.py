@@ -23,10 +23,11 @@ from agno.run.base import RunStatus
 from agno.run.requirement import RunRequirement
 from agno.run.team import RunCompletedEvent, RunPausedEvent, TeamRunOutput
 from agno.team import Team
-from agno.tools import Toolkit
+from agno.tools import Toolkit, tool
 
 from digitalkin.community.agno import AgnoHitlRunner, AguiTools
 from digitalkin.community.agno.toolkits import DefaultToolkits, LoadManager
+from digitalkin.models.events import AgentRunEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -229,11 +230,20 @@ def loads(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return record
 
 
-def _member(name: str) -> Agent:
+def _two_loads_script(messages: list[Message], tools: list[str]) -> ModelResponse:
+    """Load twice, as a member does when it searches, loads, then loads again."""
+    loads = sum(1 for message in messages if message.role == "tool" and message.tool_name == "load_manager")
+    if loads < 2:
+        args = {"action": {"action": "tool", "setup_id": f"setup-{loads}"}}
+        return _call("load_manager", args, f"call-load-{loads}")
+    return _member_script(messages, tools)
+
+
+def _member(name: str, script: Callable[[list[Message], list[str]], ModelResponse] = _member_script) -> Agent:
     """A sub-agent wired the way a module builds one: defaults without chat history, then bound."""
     context = SimpleNamespace(user_profile=None, setup=None)
     tools = DefaultToolkits.build(context, chat_history=False)  # type: ignore[arg-type]
-    agent = Agent(name=name, model=ScriptedModel(_member_script), tools=tools)
+    agent = Agent(name=name, model=ScriptedModel(script), tools=tools)
     DefaultToolkits.bind_host(tools, agent)
     return agent
 
@@ -259,6 +269,319 @@ class TestTeamMemberLoad:
         assert loads["loaders"] == [LoadManager.find(member.tools)]
         assert any(isinstance(tool, WeatherTools) for tool in member.tools)  # type: ignore[union-attr]
         assert loads["weather_calls"] == ["get_weather"]
+
+
+class TestTeamMemberLoadStream:
+    """A member's load is resolved in-process: on the wire it is one uninterrupted delegation."""
+
+    @staticmethod
+    async def _events(member_script: Callable[[list[Message], list[str]], ModelResponse] = _member_script) -> list[Any]:
+        def leader_script(messages: list[Message], _tools: list[str]) -> ModelResponse:
+            if not _answered(messages, "delegate_task_to_member"):
+                return _call("delegate_task_to_member", {"member_id": "analyst", "task": "weather?"}, "call-delegate")
+            return ModelResponse(role="assistant", content="leader done")
+
+        team = Team(
+            name="team", model=ScriptedModel(leader_script), members=[_member("analyst", member_script)], db=InMemoryDb()
+        )
+        send = AsyncMock()
+
+        pause = await AgnoHitlRunner(agent=team, store=AsyncMock()).run("weather?", send=send, thread_id="thread-1")
+
+        assert pause is None
+        return [call.args[0] for call in send.await_args_list]
+
+    async def test_delegation_is_not_reported_as_suspended(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        finished = [e for e in events if e.event == AgentRunEvent.SUBAGENT_FINISHED]
+        assert [e.outcome for e in finished] == [None]
+
+    async def test_delegation_opens_once(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        assert len([e for e in events if e.event == AgentRunEvent.SUBAGENT_STARTED]) == 1
+
+    async def test_member_output_stays_attributed_after_the_load(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        subagent = next(e for e in events if e.event == AgentRunEvent.SUBAGENT_STARTED).subagent_run_id
+        weather = [e for e in events if e.event == AgentRunEvent.TOOL_CALL_STARTED and e.tool.tool_name == "get_weather"]
+        answer = [e for e in events if e.event == AgentRunEvent.RUN_CONTENT and e.content == "sunny"]
+        assert [e.subagent_run_id for e in weather] == [subagent]
+        assert [e.subagent_run_id for e in answer] == [subagent]
+
+    async def test_the_load_call_itself_is_attributed_to_the_member(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        subagent = next(e for e in events if e.event == AgentRunEvent.SUBAGENT_STARTED).subagent_run_id
+        load = [
+            e
+            for e in events
+            if e.event == AgentRunEvent.TOOL_CALL_STARTED and e.tool.tool_name.startswith("load_manager")
+        ]
+        assert [e.subagent_run_id for e in load] == [subagent]
+
+    async def test_delegation_tool_call_is_not_failed_by_the_pause(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        assert [e.tool.tool_name for e in events if e.event == AgentRunEvent.TOOL_CALL_ERROR] == []
+
+    @staticmethod
+    def _delegation(events: list[Any]) -> Any:
+        return next(
+            e
+            for e in events
+            if e.event == AgentRunEvent.TOOL_CALL_COMPLETED and e.tool.tool_name == "delegate_task_to_member"
+        )
+
+    async def test_delegation_returns_the_members_answer(self, loads: dict[str, Any]) -> None:
+        delegation = self._delegation(await self._events())
+
+        assert delegation.tool.result == "sunny"
+        assert delegation.content == "sunny"
+
+    async def test_delegation_closes_after_the_member_finished(self, loads: dict[str, Any]) -> None:
+        events = await self._events()
+
+        finished = next(i for i, e in enumerate(events) if e.event == AgentRunEvent.SUBAGENT_FINISHED)
+        assert events.index(self._delegation(events)) > finished
+
+    async def test_two_loads_in_a_row_read_as_one_delegation(self, loads: dict[str, Any]) -> None:
+        events = await self._events(_two_loads_script)
+
+        assert [e.outcome for e in events if e.event == AgentRunEvent.SUBAGENT_FINISHED] == [None]
+        assert self._delegation(events).tool.result == "sunny"
+
+
+@tool(external_execution=True)
+def ask_user(question: str) -> str:
+    """Ask the user, in the front.
+
+    Args:
+        question: What to ask.
+
+    Returns:
+        The user's answer.
+    """
+    return question
+
+
+class TestMemberAcrossAHumanPause:
+    """The leader waits on the user while a member is mid-load: the member resumes on the next run."""
+
+    @staticmethod
+    def _leader(messages: list[Message], _tools: list[str]) -> ModelResponse:
+        if _answered(messages, "ask_user"):
+            return ModelResponse(role="assistant", content="leader done")
+        calls = [("delegate_task_to_member", {"member_id": "analyst", "task": "weather?"}, "call-delegate")]
+        calls.append(("ask_user", {"question": "short?"}, "call-ask"))
+        return ModelResponse(
+            role="assistant",
+            tool_calls=[
+                {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                for name, args, call_id in calls
+            ],
+        )
+
+    async def _runs(self) -> tuple[list[Any], list[Any]]:
+        team = Team(
+            name="team",
+            model=ScriptedModel(self._leader),
+            members=[_member("analyst", _two_loads_script)],
+            tools=[ask_user],
+            db=InMemoryDb(),
+        )
+        runner = AgnoHitlRunner(agent=team, storage=FakeStorage())
+        first, second = AsyncMock(), AsyncMock()
+
+        pause = await runner.run("go", send=first, thread_id="thread-1")
+
+        assert pause is not None
+        assert pause.pending_tool_call_ids == ["call-ask"]
+        answer = SimpleNamespace(
+            thread_id="thread-1",
+            run_id="run2",
+            messages=[ToolMessage(id="m1", role="tool", tool_call_id="call-ask", content="yes")],
+            tools=[],
+        )
+        assert await runner.try_resume(answer, send=second) == (True, None)  # type: ignore[arg-type]
+        return [c.args[0] for c in first.await_args_list], [c.args[0] for c in second.await_args_list]
+
+    async def test_member_is_suspended_while_the_user_is_waited_on(self, loads: dict[str, Any]) -> None:
+        first, _ = await self._runs()
+
+        assert [e.outcome for e in first if e.event == AgentRunEvent.SUBAGENT_FINISHED] == ["suspended"]
+
+    async def test_member_reopens_under_the_same_id(self, loads: dict[str, Any]) -> None:
+        first, second = await self._runs()
+
+        opened = next(e for e in first if e.event == AgentRunEvent.SUBAGENT_STARTED)
+        reopened = [e for e in second if e.event == AgentRunEvent.SUBAGENT_STARTED]
+        assert [(e.subagent_run_id, e.name) for e in reopened] == [(opened.subagent_run_id, opened.name)]
+
+    async def test_resumed_member_output_stays_attributed(self, loads: dict[str, Any]) -> None:
+        first, second = await self._runs()
+
+        subagent = next(e for e in first if e.event == AgentRunEvent.SUBAGENT_STARTED).subagent_run_id
+        weather = [e for e in second if e.event == AgentRunEvent.TOOL_CALL_STARTED and e.tool.tool_name == "get_weather"]
+        answer = [e for e in second if e.event == AgentRunEvent.RUN_CONTENT and e.content == "sunny"]
+        assert [e.subagent_run_id for e in weather] == [subagent]
+        assert [e.subagent_run_id for e in answer] == [subagent]
+
+    async def test_resumed_member_finishes(self, loads: dict[str, Any]) -> None:
+        _, second = await self._runs()
+
+        assert [e.outcome for e in second if e.event == AgentRunEvent.SUBAGENT_FINISHED] == [None]
+
+    async def test_answered_frontend_tool_is_not_announced_again(self, loads: dict[str, Any]) -> None:
+        _, second = await self._runs()
+
+        started = [e.tool.tool_name for e in second if e.event == AgentRunEvent.TOOL_CALL_STARTED]
+        assert "ask_user" not in started
+
+
+class TestLeaderReadsTheMembersAnswer:
+    """What the leader's model is given once its member is done, on every path back to it.
+
+    Agno only swaps its pause marker for the member's answer when the pause holds member
+    requirements alone. With a team-level one, a frontend tool, it runs the member and then lets
+    the leader read the marker: the leader reports a member stuck on a human, which never was.
+    """
+
+    @staticmethod
+    def _delegation_results(messages: list[Message]) -> list[Any]:
+        return [m.content for m in messages if m.role == "tool" and m.tool_name == "delegate_task_to_member"]
+
+    async def _final_reading(self, leader: Callable[[list[Message], list[str]], ModelResponse]) -> list[Any]:
+        seen: list[list[Any]] = []
+
+        def recording(messages: list[Message], tools: list[str]) -> ModelResponse:
+            seen.append(self._delegation_results(messages))
+            return leader(messages, tools)
+
+        team = Team(
+            name="team",
+            model=ScriptedModel(recording),
+            members=[_member("analyst", _two_loads_script)],
+            tools=[ask_user],
+            db=InMemoryDb(),
+        )
+        runner = AgnoHitlRunner(agent=team, storage=FakeStorage())
+
+        pause = await runner.run("go", send=AsyncMock(), thread_id="thread-1")
+
+        if pause is not None:
+            answer = SimpleNamespace(
+                thread_id="thread-1",
+                run_id="run2",
+                messages=[ToolMessage(id="m1", role="tool", tool_call_id="call-ask", content="yes")],
+                tools=[],
+            )
+            assert await runner.try_resume(answer, send=AsyncMock()) == (True, None)  # type: ignore[arg-type]
+        return seen[-1]
+
+    async def test_delegating_alone(self, loads: dict[str, Any]) -> None:
+        def leader(messages: list[Message], _tools: list[str]) -> ModelResponse:
+            if not _answered(messages, "delegate_task_to_member"):
+                return _call("delegate_task_to_member", {"member_id": "analyst", "task": "w"}, "call-delegate")
+            return ModelResponse(role="assistant", content="leader done")
+
+        reading = await self._final_reading(leader)
+
+        assert len(reading) == 1
+        assert "sunny" in reading[0]
+        assert "requires human input" not in reading[0]
+
+    async def test_delegating_after_the_user_answered(self, loads: dict[str, Any]) -> None:
+        def leader(messages: list[Message], _tools: list[str]) -> ModelResponse:
+            if not _answered(messages, "ask_user"):
+                return _call("ask_user", {"question": "go?"}, "call-ask")
+            if not _answered(messages, "delegate_task_to_member"):
+                return _call("delegate_task_to_member", {"member_id": "analyst", "task": "w"}, "call-delegate")
+            return ModelResponse(role="assistant", content="leader done")
+
+        assert await self._final_reading(leader) == ["sunny"]
+
+    async def test_delegating_in_the_same_turn_as_a_question(self, loads: dict[str, Any]) -> None:
+        assert await self._final_reading(TestMemberAcrossAHumanPause._leader) == ["sunny"]
+
+
+class TestFanOutDelegation:
+    """One `delegate_task_to_members` call reaches every member: one pausing keeps the others' answers."""
+
+    TOOL = "delegate_task_to_members"
+
+    @staticmethod
+    def _writer(_messages: list[Message], _tools: list[str]) -> ModelResponse:
+        return ModelResponse(role="assistant", content="written")
+
+    def _team(self, leader: Callable[[list[Message], list[str]], ModelResponse], seen: list[list[Any]]) -> Team:
+        def recording(messages: list[Message], tools: list[str]) -> ModelResponse:
+            seen.append([m.content for m in messages if m.role == "tool" and m.tool_name == self.TOOL])
+            return leader(messages, tools)
+
+        return Team(
+            name="team",
+            model=ScriptedModel(recording),
+            members=[_member("writer", self._writer), _member("analyst", _two_loads_script)],
+            tools=[ask_user],
+            delegate_to_all_members=True,
+            db=InMemoryDb(),
+        )
+
+    async def test_a_load_keeps_every_answer(self, loads: dict[str, Any]) -> None:
+        def leader(messages: list[Message], _tools: list[str]) -> ModelResponse:
+            if not _answered(messages, self.TOOL):
+                return _call(self.TOOL, {"task": "go"}, "call-all")
+            return ModelResponse(role="assistant", content="leader done")
+
+        seen: list[list[Any]] = []
+        send = AsyncMock()
+
+        pause = await AgnoHitlRunner(agent=self._team(leader, seen), store=AsyncMock()).run(
+            "go", send=send, thread_id="thread-1"
+        )
+
+        events = [call.args[0] for call in send.await_args_list]
+        assert pause is None
+        assert [e.outcome for e in events if e.event == AgentRunEvent.SUBAGENT_FINISHED] == [None, None]
+        assert [e.tool.tool_name for e in events if e.event == AgentRunEvent.TOOL_CALL_ERROR] == []
+        assert len(seen[-1]) == 1
+        assert "written" in seen[-1][0]
+        assert "sunny" in seen[-1][0]
+        assert "requires human input" not in seen[-1][0].lower()
+
+    async def test_a_human_pause_keeps_every_answer(self, loads: dict[str, Any]) -> None:
+        def leader(messages: list[Message], _tools: list[str]) -> ModelResponse:
+            if _answered(messages, "ask_user"):
+                return ModelResponse(role="assistant", content="leader done")
+            calls = [(self.TOOL, {"task": "go"}, "call-all"), ("ask_user", {"question": "short?"}, "call-ask")]
+            return ModelResponse(
+                role="assistant",
+                tool_calls=[
+                    {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                    for name, args, call_id in calls
+                ],
+            )
+
+        seen: list[list[Any]] = []
+        runner = AgnoHitlRunner(agent=self._team(leader, seen), storage=FakeStorage())
+
+        pause = await runner.run("go", send=AsyncMock(), thread_id="thread-1")
+
+        assert pause is not None
+        answer = SimpleNamespace(
+            thread_id="thread-1",
+            run_id="run2",
+            messages=[ToolMessage(id="m1", role="tool", tool_call_id="call-ask", content="yes")],
+            tools=[],
+        )
+        assert await runner.try_resume(answer, send=AsyncMock()) == (True, None)  # type: ignore[arg-type]
+        assert len(seen[-1]) == 1
+        assert "written" in seen[-1][0]
+        assert "sunny" in seen[-1][0]
+        assert "requires human input" not in seen[-1][0].lower()
 
 
 def _requirement(tool_name: str, *, member: str | None = "analyst") -> RunRequirement:
