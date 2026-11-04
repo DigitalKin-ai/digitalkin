@@ -25,6 +25,7 @@ from digitalkin.mixins.agui_mixin import AgUiMixin
 from digitalkin.models.events import (
     AgentRunEvent,
     CustomEvent,
+    ModelInfo,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -388,7 +389,10 @@ class TestAgUi10ProducerConformance:
         """TOOL_CALL_START keeps toolCallName technical and puts both labels in metadata, not at the root."""
         ctx = _make_context()
         tool = ToolInfo(
-            tool_call_id="c1", tool_name="services_manager", tool_display_name="Services", function_display_name="Create"
+            tool_call_id="c1",
+            tool_name="services_manager",
+            tool_display_name="Services",
+            function_display_name="Create",
         )
         await AgUiMixin()._handle_tool_call_started(
             ctx, ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool)
@@ -439,6 +443,62 @@ class TestAgUi10ProducerConformance:
             ToolCallStartedEvent(
                 event=AgentRunEvent.TOOL_CALL_STARTED, tool=ToolInfo(tool_call_id="c1", tool_name="frontend_tool")
             ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert "metadata" not in wire
+
+    async def test_tool_call_start_carries_the_model_beside_its_labels(self) -> None:
+        """The model that decided the call rides in metadata with the tool labels."""
+        ctx = _make_context()
+        tool = ToolInfo(tool_call_id="c1", tool_name="ask_form", tool_display_name="Ask form")
+        await AgUiMixin()._handle_tool_call_started(
+            ctx,
+            ToolCallStartedEvent(
+                event=AgentRunEvent.TOOL_CALL_STARTED, tool=tool, model=ModelInfo(name="claude-opus-4-5")
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {"toolDisplayName": "Ask form", "model": "claude-opus-4-5"}
+
+    async def test_text_message_start_after_fallback_names_both_models(self) -> None:
+        """``requestedModel`` is only sent when a fallback replaced the requested model."""
+        ctx = _make_context()
+        await AgUiMixin()._handle_text_message_started(
+            ctx,
+            TextMessageStartedEvent(
+                event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                message_id="m1",
+                metadata={"name": "ArchetypeAda"},
+                model=ModelInfo(name="claude-sonnet-4.5", requested_name="claude-opus-4-5"),
+            ),
+        )
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["metadata"] == {
+            "digitalkin": {"name": "ArchetypeAda"},
+            "model": "claude-sonnet-4.5",
+            "requestedModel": "claude-opus-4-5",
+        }
+
+    async def test_reasoning_start_events_carry_the_model(self) -> None:
+        ctx = _make_context()
+        await AgUiMixin()._handle_reasoning_started(
+            ctx,
+            ReasoningStartedEvent(
+                event=AgentRunEvent.REASONING_STARTED, reasoning_id="r1", model=ModelInfo(name="claude-opus-4-5")
+            ),
+        )
+
+        wires = [c.args[0].model_dump(mode="json")["root"]["event"] for c in ctx.callbacks.send_message.await_args_list]
+        assert [w["type"] for w in wires] == ["REASONING_START", "REASONING_MESSAGE_START"]
+        assert all(w["metadata"] == {"model": "claude-opus-4-5"} for w in wires)
+
+    async def test_text_message_start_without_model_has_no_model_key(self) -> None:
+        ctx = _make_context()
+        await AgUiMixin()._handle_text_message_started(
+            ctx, TextMessageStartedEvent(event=AgentRunEvent.TEXT_MESSAGE_STARTED, message_id="m1")
         )
 
         wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]

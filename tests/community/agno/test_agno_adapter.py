@@ -1960,7 +1960,7 @@ def test_metadata_switches_between_team_and_agent_events() -> None:
 
 
 def test_realistic_sequence_with_reasoning_text_tool_and_pause() -> None:
-    """think → reasoning_step → text → search → analyze → reasoning_step → text → frontend pause."""
+    """Think → reasoning_step → text → search → analyze → reasoning_step → text → frontend pause."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -2230,3 +2230,106 @@ def test_model_citations_emitted_once_per_url() -> None:
     assert done[0].value.title == "C"
     assert kinds.count(SourceCitationEvent) == 1
     assert kinds[-1] is RunCompletedEvent
+
+
+# ── Model labels ────────────────────────────────────────────────────────────
+
+
+def _served(name: str, requested: str | None = None) -> dict[str, Any]:
+    """``model_provider_data`` of a content event whose LLM call reported its served model."""
+    from digitalkin.models.events import ModelInfo
+
+    return {ModelInfo.PROVIDER_DATA_KEY: {"name": name, "requested_name": requested}}
+
+
+def test_messages_carry_the_configured_model_from_run_started() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, content="hi"))
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("claude-opus-4-5", None)
+
+
+def test_fallback_reported_by_the_model_replaces_the_configured_one() -> None:
+    """The first delta of a fallen-back call names the served model before any text opens."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="hi",
+            model_provider_data=_served("claude-sonnet-4.5", "claude-opus-4-5"),
+        )
+    )
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("claude-sonnet-4.5", "claude-opus-4-5")
+
+
+def test_tool_only_call_labels_its_tool_call_with_the_served_model() -> None:
+    """A delta with no text but the served model still labels the tool call that follows."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="gpt-5.1"))
+    silent = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_content, model_provider_data=_served("gpt-5", "gpt-5.1"))
+    )
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.tool_call_started, tool=_make_tool(tool_call_id="tc1", tool_name="search"))
+    )
+
+    assert silent == []
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.model is not None
+    assert (started.model.name, started.model.requested_name) == ("gpt-5", "gpt-5.1")
+
+
+def test_reasoning_carries_the_model() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1", model="claude-opus-4-5"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, reasoning_content="thinking"))
+
+    started = next(e for e in result if isinstance(e, ReasoningStartedEvent))
+    assert started.model is not None
+    assert started.model.name == "claude-opus-4-5"
+
+
+def test_members_keep_their_own_model() -> None:
+    """A team member's messages carry the member's model, not the leader's."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team", model="claude-opus-4-5"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team", model="gemini-3.8-flash")
+    )
+    member = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, run_id="m1", content="member"))
+    leader = adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_content, run_id="team", content="lead"))
+
+    member_start = next(e for e in member if isinstance(e, TextMessageStartedEvent))
+    leader_start = next(e for e in leader if isinstance(e, TextMessageStartedEvent))
+    assert member_start.model is not None
+    assert member_start.model.name == "gemini-3.8-flash"
+    assert leader_start.model is not None
+    assert leader_start.model.name == "claude-opus-4-5"
+
+
+def test_no_model_known_sends_no_model() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, content="hi"))
+
+    started = next(e for e in result if isinstance(e, TextMessageStartedEvent))
+    assert started.model is None

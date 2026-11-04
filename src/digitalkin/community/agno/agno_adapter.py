@@ -64,6 +64,7 @@ from digitalkin.models.events import (
     CustomEvent,
     MissionTitle,
     MissionTitleEvent,
+    ModelInfo,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -143,6 +144,10 @@ class AgnoStreamAdapter:
 
         self._last_metadata: dict[str, Any] | None = None
         self._run_key: str = ""
+        # Model of each run, keyed like the sequences: the configured one from its run_started,
+        # replaced by the model that actually answered once the model reports it (a LiteLLM
+        # fallback). Stamped on every message, reasoning phase and tool call the run opens.
+        self._models: dict[str, ModelInfo] = {}
 
     @property
     def is_paused(self) -> bool:
@@ -298,8 +303,31 @@ class AgnoStreamAdapter:
         # without a run id attached to the run it actually came from, so its sequence can still
         # be closed by that run's completion.
         self._run_key = agno_event.__dict__.get("run_id") or self._active_run_id or ""
+        self._track_model(agno_event, is_run_start=handler == self._handle_run_started)
 
         return handler(agno_event, agno_event.__dict__.get("timestamp"))
+
+    def _track_model(self, agno_event: AgnoRunEvent, *, is_run_start: bool) -> None:
+        """Record the model of the event's run.
+
+        A run_started names the configured model. A content event whose ``model_provider_data``
+        carries :attr:`ModelInfo.PROVIDER_DATA_KEY` names the model that answered the LLM call it
+        streams, which differs from the configured one after a fallback; later sequences of the
+        run carry it until another call reports otherwise.
+
+        Args:
+            agno_event: The Agno event being converted.
+            is_run_start: Whether it is a run_started (top-level or a member's).
+        """
+        data = agno_event.__dict__
+        configured = data.get("model")
+        if is_run_start and isinstance(configured, str) and configured:
+            self._models[self._run_key] = ModelInfo(name=configured)
+            return
+        provider_data = data.get("model_provider_data")
+        reported = provider_data.get(ModelInfo.PROVIDER_DATA_KEY) if isinstance(provider_data, dict) else None
+        if isinstance(reported, dict) and reported.get("name"):
+            self._models[self._run_key] = ModelInfo.model_validate(reported)
 
     # ── Run Lifecycle Handlers ───────────────────────────────────────────
 
@@ -573,6 +601,7 @@ class AgnoStreamAdapter:
         events.append(
             ReasoningStartedEvent(
                 event=AgentRunEvent.REASONING_STARTED,
+                model=self._models.get(self._run_key),
                 reasoning_id=reasoning_id,
                 subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
@@ -602,6 +631,7 @@ class AgnoStreamAdapter:
             events.append(
                 ReasoningStartedEvent(
                     event=AgentRunEvent.REASONING_STARTED,
+                    model=self._models.get(self._run_key),
                     reasoning_id=open_reasoning[0],
                     subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
@@ -657,6 +687,7 @@ class AgnoStreamAdapter:
             events.append(
                 ReasoningStartedEvent(
                     event=AgentRunEvent.REASONING_STARTED,
+                    model=self._models.get(self._run_key),
                     reasoning_id=open_reasoning[0],
                     subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
@@ -743,6 +774,7 @@ class AgnoStreamAdapter:
         events.append(
             ToolCallStartedEvent(
                 event=AgentRunEvent.TOOL_CALL_STARTED,
+                model=self._models.get(self._run_key),
                 tool=tool_info,
                 subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
@@ -869,6 +901,7 @@ class AgnoStreamAdapter:
             events.extend((
                 ToolCallStartedEvent(
                     event=AgentRunEvent.TOOL_CALL_STARTED,
+                    model=self._models.get(self._run_key),
                     tool=tool_info,
                     subagent_run_id=subagent_run_id,
                     timestamp=timestamp,
@@ -1254,6 +1287,7 @@ class AgnoStreamAdapter:
             events.append(
                 ReasoningStartedEvent(
                     event=AgentRunEvent.REASONING_STARTED,
+                    model=self._models.get(self._run_key),
                     reasoning_id=open_reasoning[0],
                     subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
@@ -1296,6 +1330,7 @@ class AgnoStreamAdapter:
             events.append(
                 TextMessageStartedEvent(
                     event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                    model=self._models.get(self._run_key),
                     message_id=open_message[0],
                     name=meta.get("name") if meta.get("parent_run_id") else None,
                     subagent_run_id=self._subagent_of(self._run_key),

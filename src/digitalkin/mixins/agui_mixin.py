@@ -46,6 +46,7 @@ from digitalkin.models.events import (
     BaseAgentRunEvent,
     CustomEvent,
     MissionTitle,
+    ModelInfo,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -442,6 +443,28 @@ class AgUiMixin:
         return fields
 
     @staticmethod
+    def _with_model(authored: dict[str, Any], model: ModelInfo | None) -> dict[str, Any]:
+        """Add the model labels to an event's ``metadata``, beside ``digitalkin``.
+
+        ``model`` is the model that answered. ``requestedModel`` is only sent when a LiteLLM
+        fallback replaced the requested model, so its presence alone tells a fallback happened.
+
+        Args:
+            authored: Fields from :meth:`_authored`, updated in place.
+            model: The model of the event, or None to send no model label.
+
+        Returns:
+            ``authored``.
+        """
+        if model is None:
+            return authored
+        labels = {"model": model.name}
+        if model.requested_name is not None:
+            labels["requestedModel"] = model.requested_name
+        authored.setdefault("metadata", {}).update(labels)
+        return authored
+
+    @staticmethod
     def _unidentified(context: ModuleContext, event: BaseAgentRunEvent) -> None:
         """Log an event dropped because the id its AG-UI counterpart requires is missing.
 
@@ -515,7 +538,7 @@ class AgUiMixin:
                 message_id=event.message_id,
                 role="assistant",
                 name=event.name,
-                **self._authored(event),
+                **self._with_model(self._authored(event), event.model),
             )
         )
         await self._send_agui(context, output)
@@ -702,7 +725,7 @@ class AgUiMixin:
             return
 
         # Labels ride in metadata beside the ``digitalkin`` key; absent labels stay absent.
-        authored = self._authored(event)
+        authored = self._with_model(self._authored(event), event.model)
         labels = {
             key: label
             for key, label in (
@@ -838,12 +861,16 @@ class AgUiMixin:
             return
 
         start_output = AgUiReasoningStartOutput(
-            event=AgUiReasoningStartEvent(message_id=reasoning_id, **self._authored(event)),
+            event=AgUiReasoningStartEvent(
+                message_id=reasoning_id, **self._with_model(self._authored(event), event.model)
+            ),
         )
         await self._send_agui(context, start_output)
 
         message_start_output = AgUiReasoningMessageStartOutput(
-            event=AgUiReasoningMessageStartEvent(message_id=reasoning_id, role="reasoning", **self._authored(event))
+            event=AgUiReasoningMessageStartEvent(
+                message_id=reasoning_id, role="reasoning", **self._with_model(self._authored(event), event.model)
+            )
         )
         await self._send_agui(context, message_start_output)
 

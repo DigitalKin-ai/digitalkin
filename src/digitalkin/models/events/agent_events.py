@@ -7,7 +7,7 @@ used across different AI frameworks (Agno, LangChain, custom agents, etc.).
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -64,12 +64,31 @@ class RunStartedEvent(BaseAgentRunEvent):
     thread_id: str | None = Field(default=None, description="Thread/conversation identifier")
 
 
+class ModelInfo(BaseModel):
+    """The LLM that produced a message, reasoning phase or tool call.
+
+    ``name`` is the model that actually answered. Behind the LiteLLM proxy a model group can fall
+    back to another one; ``requested_name`` is then the model that was asked for, and stays None
+    when the requested model answered itself.
+    """
+
+    # Key under which a model reports itself in agno's ``ModelResponse.provider_data``; agno
+    # forwards it on ``RunContentEvent.model_provider_data`` to the stream adapter.
+    PROVIDER_DATA_KEY: ClassVar[str] = "digitalkin_model"
+
+    name: str = Field(..., description="Model that answered")
+    requested_name: str | None = Field(
+        default=None, description="Model that was requested, set only when a fallback replaced it"
+    )
+
+
 class TextMessageStartedEvent(BaseAgentRunEvent):
     """Event emitted when a new text message sequence begins."""
 
     event: AgentRunEvent = Field(AgentRunEvent.TEXT_MESSAGE_STARTED, description="Event type")
     message_id: str = Field(..., description="Unique ID for this text message")
     name: str | None = Field(default=None, description="Author label — the sub-agent that owns this message")
+    model: ModelInfo | None = Field(default=None, description="Model that wrote this message")
 
 
 class TextMessageCompletedEvent(BaseAgentRunEvent):
@@ -152,6 +171,7 @@ class ReasoningStartedEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.REASONING_STARTED, description="Event type")
     reasoning_id: str | None = Field(default=None, description="Unique ID for this reasoning phase")
+    model: ModelInfo | None = Field(default=None, description="Model doing the reasoning")
 
 
 class ReasoningContentDeltaEvent(BaseAgentRunEvent):
@@ -210,6 +230,7 @@ class ToolCallStartedEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_STARTED, description="Event type")
     tool: ToolInfo | None = Field(default=None, description="Tool information")
+    model: ModelInfo | None = Field(default=None, description="Model that decided the call")
 
 
 class ToolCallCompletedEvent(BaseAgentRunEvent):

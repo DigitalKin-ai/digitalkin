@@ -41,6 +41,7 @@ from pydantic import BaseModel
 from digitalkin.community.litellm.cost import CostTrackingLogger
 from digitalkin.community.litellm.registry import LiteLLMRegistry
 from digitalkin.logger import logger
+from digitalkin.models.events import ModelInfo
 
 if TYPE_CHECKING:
     import asyncio
@@ -92,6 +93,9 @@ class SafeLiteLLM(LiteLLM):
     _request_image_parts: ClassVar[ContextVar[tuple[int, int]]] = ContextVar(
         "safe_litellm_request_image_parts", default=(0, 0)
     )
+    # Id of the streamed response whose served model this task already reported. The proxy repeats
+    # its headers on every chunk; the model is reported once per LLM call.
+    _model_reported_for: ClassVar[ContextVar[str | None]] = ContextVar("safe_litellm_model_reported_for", default=None)
 
     @classmethod
     def from_spec(
@@ -241,6 +245,7 @@ class SafeLiteLLM(LiteLLM):
         """
         self._raise_on_refusal(response)
         model_response = super()._parse_provider_response(response, **kwargs)
+        self._report_served_model(model_response, response, streamed=False)
         citations = self._url_citations(response.choices[0].message.get("annotations"))
         if citations is not None:
             model_response.citations = citations
@@ -257,11 +262,66 @@ class SafeLiteLLM(LiteLLM):
         """
         self._raise_on_refusal(response_delta)
         model_response = super()._parse_provider_response_delta(response_delta)
+        self._report_served_model(model_response, response_delta, streamed=True)
         if response_delta.choices:
             citations = self._url_citations(response_delta.choices[0].delta.get("annotations"))
             if citations is not None:
                 model_response.citations = citations
         return model_response
+
+    def _served_model(self, response: Any) -> ModelInfo | None:
+        """Read which model group of the LiteLLM proxy answered, from its response headers.
+
+        The proxy stamps ``x-litellm-model-group`` with the group that served the call (the
+        fallback group after a fallback) and ``x-litellm-attempted-fallbacks`` with the fallback
+        depth; litellm keeps them, ``llm_provider-`` prefixed, in ``_hidden_params``. The body's
+        ``model`` cannot be trusted: on a stream the proxy restamps every chunk with the requested
+        model, fallback or not.
+
+        Args:
+            response: A litellm completion or streaming chunk.
+
+        Returns:
+            The served model, or None when the response carries no proxy headers.
+        """
+        hidden = getattr(response, "_hidden_params", None)
+        if hidden is not None and not isinstance(hidden, dict):
+            hidden = hidden.model_dump() if hasattr(hidden, "model_dump") else None
+        headers = (hidden or {}).get("additional_headers") or {}
+        group = headers.get("llm_provider-x-litellm-model-group")
+        if not group:
+            return None
+        try:
+            fallbacks = int(headers.get("llm_provider-x-litellm-attempted-fallbacks") or 0)
+        except (TypeError, ValueError):
+            fallbacks = 0
+        replaced = fallbacks > 0 and group != self.id
+        return ModelInfo(name=group, requested_name=self.id if replaced else None)
+
+    def _report_served_model(self, model_response: ModelResponse, response: Any, *, streamed: bool) -> None:
+        """Put the served model in ``provider_data``, once per LLM call.
+
+        agno forwards ``provider_data`` on ``RunContentEvent.model_provider_data`` (even on a
+        delta with no text, so a call that only requests tools still reports its model), and the
+        stream adapter labels the messages and tool calls that follow with it.
+
+        Args:
+            model_response: The parsed response or delta, updated in place.
+            response: The raw litellm completion or chunk.
+            streamed: Whether ``response`` is one chunk of a stream.
+        """
+        response_id = getattr(response, "id", None) if streamed else None
+        if response_id is not None and self._model_reported_for.get() == response_id:
+            return
+        served = self._served_model(response)
+        if served is None:
+            return
+        if response_id is not None:
+            self._model_reported_for.set(response_id)
+        model_response.provider_data = {
+            **(model_response.provider_data or {}),
+            ModelInfo.PROVIDER_DATA_KEY: served.model_dump(),
+        }
 
     @staticmethod
     def _url_citations(annotations: Any) -> Citations | None:
