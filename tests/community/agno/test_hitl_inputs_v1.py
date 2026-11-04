@@ -59,7 +59,7 @@ class TestContentText:
 
         assert text == "look at this"
         assert [(i.content, i.mime_type, i.url) for i in images] == [(b"\x89PNG-bytes", "image/png", None)]
-        dropped = [c.args for c in log.info.call_args_list if c.args[0].startswith("[VALIDATE AGUI-PART-DROPPED]")]
+        dropped = [c.args for c in log.info.call_args_list if c.args[0].startswith("message %s: %s part")]
         assert [(a[2], a[3], a[4]) for a in dropped] == [("image", "img-url", "url"), ("document", "doc-file", "file")]
         # A file handle or URL is never logged in full nor handed to the model.
         assert all("file-abc123" not in repr(a) and "169.254" not in repr(a) for a in dropped)

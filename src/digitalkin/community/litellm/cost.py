@@ -182,9 +182,8 @@ class CostTrackingLogger(CustomLogger):
             return
         entry = CostRegistry.get(mission_id)
         if entry is None:
-            # TODO(validate): LLM-COST-UNREGISTERED an unbilled LLM call is logged, never dropped silently
             logger.warning(
-                "[VALIDATE LLM-COST-UNREGISTERED] LLM call of mission %s not billed: no cost service registered",
+                "LLM call of mission %s not billed: no cost service registered",
                 mission_id,
             )
             return
@@ -193,12 +192,29 @@ class CostTrackingLogger(CustomLogger):
             logger.debug("No usage on response; cost not tracked", extra={"mission_id": mission_id})
             return
         model = kwargs.get("model")
-        model_name = model.removeprefix("litellm_proxy/") if isinstance(model, str) else None
-        spec = LiteLLMRegistry.shared().try_get(model_name) if model_name else None
+        requested = model.removeprefix("litellm_proxy/") if isinstance(model, str) else None
+        registry = LiteLLMRegistry.shared()
+        served, deployment = registry.served_route(response_obj)
+        spec = registry.try_get(served) if served else None
         if spec is None:
-            logger.warning("No pricing for model %s; cost not tracked", model_name, extra={"mission_id": mission_id})
+            spec = registry.try_get(requested) if requested else None
+        elif served != requested:
+            # TODO(validate): COST-SERVED-MODEL a fallback call is billed at the served model's price
+            logger.warning(
+                "[VALIDATE COST-SERVED-MODEL] Billing on the served model %s instead of the requested %s",
+                served,
+                requested,
+                extra={"mission_id": mission_id},
+            )
+        if spec is None:
+            logger.warning(
+                "No pricing for model %s (served %s); cost not tracked",
+                requested,
+                served,
+                extra={"mission_id": mission_id},
+            )
             return
-        await self._book(usage, spec, entry[0], entry[1], mission_id)
+        await self._book(usage, spec, entry[0], entry[1], mission_id, deployment)
 
     @staticmethod
     def _as_dict(details: Any) -> dict[str, Any]:
@@ -219,7 +235,14 @@ class CostTrackingLogger(CustomLogger):
         return details.model_dump() if isinstance(details, BaseModel) else {}
 
     @staticmethod
-    async def _book(usage: Any, spec: ModelSpec, cost: CostStrategy, multiplier: Decimal, mission_id: str) -> None:
+    async def _book(
+        usage: Any,
+        spec: ModelSpec,
+        cost: CostStrategy,
+        multiplier: Decimal,
+        mission_id: str,
+        deployment: str | None = None,
+    ) -> None:
         """Split usage into cost categories and add each to the cost service.
 
         ``prompt_tokens`` includes cache reads (not cache writes) and ``completion_tokens`` includes
@@ -231,6 +254,7 @@ class CostTrackingLogger(CustomLogger):
             cost: The mission's cost service.
             multiplier: Price multiplier.
             mission_id: Mission id, for logging.
+            deployment: Proxy deployment that answered (``x-litellm-model-id``), for logging.
         """
         prompt_details = CostTrackingLogger._as_dict(usage.prompt_tokens_details)
         completion_details = CostTrackingLogger._as_dict(usage.completion_tokens_details)
@@ -269,8 +293,10 @@ class CostTrackingLogger(CustomLogger):
                 credit(cache_creation, costs.cache_creation_input_token_cost or costs.input_cost_per_token, multiplier),
             )
         logger.info(
-            "LLM cost tracked: model=%s input=%d output=%d reasoning=%d cache_read=%d cache_write=%d multiplier=%s",
+            "LLM cost tracked: model=%s deployment=%s input=%d output=%d reasoning=%d cache_read=%d cache_write=%d "
+            "multiplier=%s",
             spec.name,
+            deployment,
             non_cached_input,
             non_reasoning_output,
             reasoning,

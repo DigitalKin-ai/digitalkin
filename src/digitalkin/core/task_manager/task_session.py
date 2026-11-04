@@ -203,7 +203,5 @@ class TaskSession:
                 except Exception:
                     logger.exception("Error cleaning up module context", extra=ids)
 
-        # TODO(validate): CLEANUP-ORDER module stop runs before context cleanup
-        logger.info("[VALIDATE CLEANUP-ORDER] session cleanup completed (stop before context cleanup)", extra=ids)
         self._cleanup_done = True
         self.module = None  # type: ignore[assignment]

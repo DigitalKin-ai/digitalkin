@@ -10,6 +10,7 @@ from digitalkin.models.module import DataModel, DataTrigger
 class MessageInputPayload(DataTrigger):
     """Input payload for message protocol."""
 
+    display_name = "Echo message"
     protocol: Literal["message"] = "message"
     user_prompt: str = Field(..., description="The user's input prompt")
 

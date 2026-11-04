@@ -227,8 +227,7 @@ class GrpcClientWrapper:
         cls._stub_cache = {k: v for k, v in cls._stub_cache.items() if k[0] != key}
         if channel is None:
             return
-        # TODO(validate): CHAN-EVICT evicted channels stay open for holders until the last release
-        logger.info("[VALIDATE CHAN-EVICT] evicted %s with %d holder(s); closed on last release", key, refs)
+        logger.info("evicted %s with %d holder(s); closed on last release", key, refs)
         if refs > 0:
             cls._evicted_refs[channel] = refs
         else:

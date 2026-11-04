@@ -12,10 +12,12 @@ from agno.exceptions import RunCancelledException
 from agno.media import Image
 from agno.models.litellm import LiteLLM
 from agno.models.message import Message
+from agno.metrics import MessageMetrics
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
 from digitalkin.community.agno.safe_litellm import SafeLiteLLM
+from digitalkin.models.events import ModelInfo
 
 EMPTY_RESPONSE_NOTICE = SafeLiteLLM.empty_response_notice
 
@@ -89,7 +91,7 @@ class TestSafeLiteLLMFormatMessages:
 
         tool_msgs = [m for m in formatted if m["role"] == "tool"]
         assert len(tool_msgs) == 1
-        assert tool_msgs[0]["content"] == ""
+        assert tool_msgs[0]["content"] == ""  # ruff: ignore[compare-to-empty-string] - "" exactly, not None
         assert tool_msgs[0]["tool_call_id"] == "call_1"
 
     def test_stock_litellm_emits_empty_content_for_tool_call_turns(self) -> None:
@@ -97,7 +99,7 @@ class TestSafeLiteLLMFormatMessages:
         formatted = _stock_model()._format_messages(_conversation())
 
         tool_call_msgs = [m for m in formatted if m["role"] == "assistant" and m.get("tool_calls")]
-        assert tool_call_msgs[0]["content"] == ""
+        assert tool_call_msgs[0]["content"] == ""  # ruff: ignore[compare-to-empty-string] - "" exactly, not None
 
 
 class TestStripEmptyContentListBlocks:
@@ -172,7 +174,7 @@ class TestTemperatureGate:
 
     def test_request_keeps_temperature_by_default(self) -> None:
         model = SafeLiteLLM(id="gpt-5", temperature=0.3)
-        assert model.get_request_params()["temperature"] == 0.3
+        assert model.get_request_params()["temperature"] == pytest.approx(0.3)
 
 
 CACHE = {"type": "ephemeral"}
@@ -263,9 +265,10 @@ class TestContextWindowTrim:
     def tiny_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import litellm
 
-        # No `max_tokens`: litellm's published map dropped it and its own lookup raises without it.
-        spec = {k: v for k, v in litellm.model_cost["claude-sonnet-4-6"].items() if k != "max_tokens"}
-        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", {**spec, "max_input_tokens": 400})
+        # litellm's trimmer reads ``max_tokens`` even when ``max_input_tokens`` is set, and the cost
+        # map it downloads at import may lack the key: pin both so the test owns the window.
+        spec = {**litellm.model_cost.get("claude-sonnet-4-6", {}), "max_input_tokens": 400, "max_tokens": 400}
+        monkeypatch.setitem(litellm.model_cost, "claude-sonnet-4-6", spec)
 
     @staticmethod
     def _cached_tiny_model() -> SafeLiteLLM:
@@ -442,7 +445,7 @@ class _FakeClient:
         if not kwargs.get("stream"):
             return reply
 
-        async def stream() -> AsyncIterator[object]:
+        async def stream() -> AsyncIterator[object]:  # ruff: ignore[unused-async] - an async generator
             for chunk in reply:  # type: ignore[attr-defined]
                 yield chunk
 
@@ -797,16 +800,16 @@ class TestImageRejectionFallback:
         class _MidStreamFailure:
             """Yields one chunk, then fails like a rejection would."""
 
-            def __iter__(self):
+            def __iter__(self) -> Iterator[object]:
                 yield from _chunks("Partial")
                 raise _image_rejection()
 
         client = _FakeClient(_MidStreamFailure())
         received: list[str] = []
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(litellm.BadRequestError):  # ruff: ignore[pytest-raises-with-multiple-statements]
             async for chunk in _model_with(client).ainvoke_stream(_media_turn(), Message(role="assistant")):
-                received.append(chunk.content or "")
+                received.append(chunk.content or "")  # ruff: ignore[manual-list-comprehension] - keep chunks seen before the error
         assert received == ["Partial"]
         assert len(client.requests) == 1
 
@@ -859,6 +862,7 @@ class _FakeCompactor:
         self.views: list[list[Message]] = []
         self.forced: list[list[Message]] = []
         self.observed: list[int] = []
+        self.calibrated: list[bool] = []
 
     async def view(self, messages: list[Message], tools: object = None, run_response: object = None) -> list[Message]:
         self.views.append(messages)
@@ -870,8 +874,9 @@ class _FakeCompactor:
         self.forced.append(messages)
         return [Message(role="user", content="REFOLDED VIEW"), *messages[-1:]] if self.refit else None
 
-    async def observe(self, sent: list[Message], tools: object, provider_tokens: int) -> None:
+    async def observe(self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True) -> None:
         self.observed.append(provider_tokens)
+        self.calibrated.append(calibrate)
 
 
 def _overflow() -> litellm.ContextWindowExceededError:
@@ -1058,6 +1063,23 @@ class TestTokenCalibration:
             pass
 
         assert compactor.observed == [12_345]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("served", "calibrate"),
+        [
+            ({"name": "claude-sonnet-5", "requested_name": None}, True),
+            ({"name": "gpt-5", "requested_name": "claude-sonnet-5"}, False),
+        ],
+    )
+    async def test_a_fallback_count_is_kept_but_not_calibrated_on(self, served: dict, calibrate: bool) -> None:
+        compactor = _FakeCompactor()
+        model = _model_with(_FakeClient(_completion("Done")), compactor=compactor)
+
+        await model._observe([], {}, MessageMetrics(input_tokens=700_000), {ModelInfo.PROVIDER_DATA_KEY: served})
+
+        assert compactor.observed == [700_000], "every count reaches the mid-run fold"
+        assert compactor.calibrated == [calibrate]
 
     @pytest.mark.asyncio
     async def test_no_usage_no_calibration(self) -> None:

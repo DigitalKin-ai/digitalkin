@@ -176,8 +176,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper, GrpcErrorHandl
             return held
         if held is not None:
             self._stale_channels.append((key, held))
-        # TODO(validate): COMM-REFCOUNT one pooled channel ref per target per instance
-        logger.info("[VALIDATE COMM-REFCOUNT] acquiring pooled channel %s", key)
         channel = self._init_channel(config)
         self._pool_keys[key] = channel
         return channel
@@ -438,14 +436,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper, GrpcErrorHandl
             if not task_id:
                 msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
                 raise RuntimeError(msg)  # ruff: ignore[raise-within-try]
-            # TODO(validate): ASSOCIATE-TASK AssociateTask mints the child task id for M2M calls
-            logger.info(
-                "[VALIDATE ASSOCIATE-TASK] AssociateTask minted: parent=%s child=%s target=%s",
-                parent_task_id,
-                task_id,
-                target_key,
-                extra=log_extra,
-            )
             log_extra["task_id"] = task_id
             timer.mark("associate_task")
             last_mark = "associate_task"

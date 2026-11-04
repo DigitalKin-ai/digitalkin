@@ -13,6 +13,7 @@ from typing import Any
 
 import litellm
 import pytest
+from litellm.types.utils import ModelResponse, Usage
 from pydantic import BaseModel
 
 from digitalkin.community.litellm import (
@@ -180,6 +181,11 @@ class TestSuccessEvent:
             "model_info": {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
         }).to_model_spec()
         registry._models[spec.name] = spec
+        cheap = ModelParser({
+            "model_name": "gpt-5-mini",
+            "model_info": {"input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07},
+        }).to_model_spec()
+        registry._models[cheap.name] = cheap
         LiteLLMRegistry._shared = registry
         yield
         LiteLLMRegistry._shared = None
@@ -199,6 +205,28 @@ class TestSuccessEvent:
     async def test_books_to_the_mission_named_in_the_metadata(self, mission: FakeCost):
         await CostTrackingLogger().async_log_success_event(
             self._call({CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"}), self._response(), None, None
+        )
+
+        assert mission.calls == [("llm_input_tokens", "chatbot_input", 2.0)]
+
+    @staticmethod
+    def _served(group: str) -> ModelResponse:
+        response = ModelResponse(usage=Usage(prompt_tokens=20_000, completion_tokens=0, total_tokens=20_000))
+        response._hidden_params = {
+            "additional_headers": {"llm_provider-x-litellm-model-group": group, "llm_provider-x-litellm-model-id": "d1"}
+        }
+        return response
+
+    async def test_a_fallback_is_billed_at_the_served_models_price(self, mission: FakeCost):
+        await CostTrackingLogger().async_log_success_event(
+            self._call({CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"}), self._served("gpt-5-mini"), None, None
+        )
+
+        assert mission.calls == [("llm_input_tokens", "chatbot_input", pytest.approx(0.2))]
+
+    async def test_an_unpriced_served_model_falls_back_to_the_requested_price(self, mission: FakeCost):
+        await CostTrackingLogger().async_log_success_event(
+            self._call({CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"}), self._served("unknown"), None, None
         )
 
         assert mission.calls == [("llm_input_tokens", "chatbot_input", 2.0)]
@@ -234,7 +262,7 @@ class TestSuccessEvent:
         with caplog.at_level(logging.WARNING, logger="digitalkin"):
             await CostTrackingLogger().async_log_success_event(kwargs, self._response(), None, None)
 
-        assert any("LLM-COST-UNREGISTERED" in record.getMessage() for record in caplog.records)
+        assert any("not billed: no cost service registered" in record.getMessage() for record in caplog.records)
 
     async def test_a_failure_never_escapes(self, mission: FakeCost):
         async def boom(*_: Any) -> None:

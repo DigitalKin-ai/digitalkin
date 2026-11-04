@@ -75,6 +75,7 @@ class LoadAction(BaseAction[LoadActionCtx], ABC):
 class LoadToolAction(LoadAction):
     """Load a discovered tool into the agent so you can call it right away."""
 
+    display_name = "Load tool"
     action: Literal["tool"] = "tool"
     setup_id: str = Field(..., description="The tool's setup id (from a tools_manager search/get) to load.")
 

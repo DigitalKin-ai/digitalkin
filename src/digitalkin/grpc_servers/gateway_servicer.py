@@ -231,8 +231,7 @@ class GatewayServicer:
         timer.mark("idempotency_claim")
         if claim is not ClaimResult.CLAIMED:
             if claim is ClaimResult.RECLAIMED:
-                # TODO(validate): IDEM-RECLAIM a refused StartStream does not refresh the idem TTL
-                logger.info("[VALIDATE IDEM-RECLAIM] StartStream refused; idem TTL not refreshed", extra=log_extra)
+                logger.info("StartStream refused; idem TTL not refreshed", extra=log_extra)
             return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         session = StreamSession(task_id=task_id)
@@ -267,7 +266,7 @@ class GatewayServicer:
         pipe.expire(stream_key, get_gateway_settings().stream.redis_stream_initial_ttl)
         pipe.get(cancel_key)
         try:
-            stale, _, _, tombstone = await pipe.execute()
+            _, _, _, tombstone = await pipe.execute()
         except RedisError:
             # Claimed + registered but the stream couldn't be seeded: undo both so a retry re-runs.
             with contextlib.suppress(RedisError):
@@ -283,16 +282,13 @@ class GatewayServicer:
                     [cancel_key],
                     [tombstone.decode()],
                 )
-                # TODO(validate): CANCEL-FOREIGN a cancel tombstone from another mission is dropped at StartStream
                 logger.warning(
-                    "[VALIDATE CANCEL-FOREIGN] cancel tombstone from mission=%r dropped=%s",
+                    "cancel tombstone from mission=%r dropped=%s",
                     tombstone,
                     bool(dropped),
                     extra=log_extra,
                 )
         timer.mark("xadd_stream_start")
-        # TODO(validate): SEED-TTL stream.start seed carries a TTL and drops stale keys
-        logger.info("[VALIDATE SEED-TTL] stream.start seeded with TTL; stale keys dropped=%s", stale, extra=log_extra)
 
         logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
         self._spawn(
@@ -360,8 +356,7 @@ class GatewayServicer:
                 extra=log_extra,
             )
         else:
-            # TODO(validate): IDEM-TTL-EOS idem TTL drops to redis_stream_ttl once EOS is written
-            logger.info("[VALIDATE IDEM-TTL-EOS] idem TTL shortened to %ds after fatal EOS", ttl, extra=log_extra)
+            logger.info("idem TTL shortened to %ds after fatal EOS", ttl, extra=log_extra)
             logger.error(
                 "stream.error emitted: code=%s message=%s",
                 code,
@@ -445,9 +440,8 @@ class GatewayServicer:
             return
 
         if first_msg.data and len(first_msg.data.fields) > 0:
-            # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
             logger.info(
-                "[VALIDATE NO-INPUT] Stream first message data is not used yet; dropped bytes=%d keys=%s",
+                "Stream first message data is not used yet; dropped bytes=%d keys=%s",
                 first_msg.data.ByteSize(),
                 list(first_msg.data.fields),
                 extra={"task_id": task_id},
@@ -488,9 +482,8 @@ class GatewayServicer:
                 if session._stop_event.is_set():  # ruff: ignore[private-member-access]
                     break
                 if msg.data and len(msg.data.fields) > 0:
-                    # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
                     logger.info(
-                        "[VALIDATE NO-INPUT] Stream follow-up input is not used yet; dropped bytes=%d keys=%s",
+                        "Stream follow-up input is not used yet; dropped bytes=%d keys=%s",
                         msg.data.ByteSize(),
                         list(msg.data.fields),
                         extra={"task_id": task_id},
@@ -580,7 +573,7 @@ class GatewayServicer:
             # A claimed task (``idem`` = ``{process}|{mission}``) only accepts its own mission's cancel;
             # a caller without ``x-mission-id`` is let through and logged (CANCEL-NO-MISSION).
             mission_id = RequestContext.current().get("mission_id", "")
-            idem_exists, receivers = await self._redis_client.eval(
+            idem_exists, _receivers = await self._redis_client.eval(
                 "local owner = redis.call('GET', KEYS[1])\n"
                 "local sep = owner and string.find(owner, '|', 1, true)\n"
                 "if sep and ARGV[1] ~= '' and string.sub(owner, sep + 1) ~= ARGV[1] then\n"
@@ -598,9 +591,8 @@ class GatewayServicer:
             timer.mark("redis_publish")
             last_mark = "redis_publish"
             if idem_exists == -1:
-                # TODO(validate): CANCEL-OWNER a cancel from another mission is refused and leaves no tombstone
                 logger.warning(
-                    "[VALIDATE CANCEL-OWNER] SendSignal_failed: failure=Forbidden caller_mission=%r "
+                    "SendSignal_failed: failure=Forbidden caller_mission=%r "
                     "does not own the task; nothing published signal=%s task_id=%s",
                     mission_id,
                     signal,
@@ -609,21 +601,11 @@ class GatewayServicer:
                 )
                 return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
             if not mission_id:
-                # TODO(validate): CANCEL-NO-MISSION a cancel without x-mission-id skips the owner check
                 logger.warning(
-                    "[VALIDATE CANCEL-NO-MISSION] cancel without x-mission-id accepted unchecked task_id=%s",
+                    "cancel without x-mission-id accepted unchecked task_id=%s",
                     task_id,
                     extra=log_extra,
                 )
-            # TODO(validate): SIGNAL-PUB SendSignal publishes without the local registry
-            logger.info(
-                "[VALIDATE SIGNAL-PUB] SendSignal published: signal=%s idem_exists=%s receivers=%s task_id=%s",
-                signal,
-                idem_exists,
-                receivers,
-                task_id,
-                extra=log_extra,
-            )
             if not idem_exists:
                 logger.warning(
                     "[gateway] SendSignal_failed: failure=TaskNotFound at_step=%s elapsed_ms=%.2f signal=%s "
@@ -718,16 +700,8 @@ class GatewayServicer:
             yield gateway_messages_pb2.StreamResponse(seq=seq, task_id=task_id, data=struct_data)
 
         # Reader EOS — emit an explicit stream.end so every stream ends uniformly.
-        t_after_reader = time.perf_counter_ns()
         seq = reader._last_seq + 2 if resume else seq + 1  # ruff: ignore[private-member-access]
         yield self._sentinel(seq, task_id, "stream.end")
-        t_after_yield = time.perf_counter_ns()
-        logger.info(
-            "[close-debug] gateway_stream_end: reader_to_yield=%.2fms t_yielded_ns=%d task_id=%s",
-            (t_after_yield - t_after_reader) / 1e6,
-            t_after_yield,
-            task_id,
-        )
 
     async def _consume_guarded(
         self,
@@ -865,8 +839,7 @@ class GatewayServicer:
                 resume = True
         finally:
             if not module_spawned:
-                # TODO(validate): IDEM-RELEASE idem is released when the dial fails before runner spawn
-                logger.info("[VALIDATE IDEM-RELEASE] dial failed before runner spawn; releasing idem", extra=log_extra)
+                logger.info("dial failed before runner spawn; releasing idem", extra=log_extra)
                 try:
                     await self._idempotency.release(task_id)
                 except RedisError:
@@ -966,7 +939,6 @@ class GatewayServicer:
                 f"dial-back channel build failed: {type(exc).__name__}: {exc}",
             )
             return False
-        t_stub = time.perf_counter_ns()
         logger.info("→ Dial-back channel ready to %s", address, extra=log_extra)
 
         def _ch_state(chan: Any) -> str:
@@ -980,16 +952,6 @@ class GatewayServicer:
                 return str(state.name)
             except Exception as exc:
                 return f"err:{type(exc).__name__}"
-
-        logger.info(
-            "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s channel_id=%s ref_count=%d cache_keys=%d",
-            (t_stub - t_dial0) / 1e6,
-            _ch_state(comm._channel),  # ruff: ignore[private-member-access]
-            id(comm._channel),  # ruff: ignore[private-member-access]
-            GrpcClientWrapper._ref_counts.get(comm._channel_cache_key or "", 0),  # ruff: ignore[private-member-access]
-            len(GrpcClientWrapper._channel_cache),  # ruff: ignore[private-member-access]
-            extra=log_extra,
-        )
 
         session = self._registry.get(task_id)
         if session is None:
@@ -1086,12 +1048,6 @@ class GatewayServicer:
 
         retriable = False
         t_pre_stream = time.perf_counter_ns()
-        logger.info(
-            "[dial-debug] pre_stream dt_since_ready=%.3fms ch_state=%s",
-            (t_pre_stream - t_stub) / 1e6,
-            _ch_state(comm._channel),  # ruff: ignore[private-member-access]
-            extra=log_extra,
-        )
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.info(
                 "→ Opening BiDi to consumer %s (sending %s)",
@@ -1171,9 +1127,8 @@ class GatewayServicer:
                     output_started.set()
                     first = False
                     continue
-                # TODO(validate): NO-INPUT follow-up data is dropped when there is no input consumer
                 logger.info(
-                    "[VALIDATE NO-INPUT] Dial-back follow-up input is not used yet; dropped bytes=%d keys=%s",
+                    "Dial-back follow-up input is not used yet; dropped bytes=%d keys=%s",
                     upstream.data.ByteSize(),
                     list(upstream.data.fields),
                     extra=log_extra,
@@ -1208,7 +1163,7 @@ class GatewayServicer:
         except _GrpcUsageError:
             t_fail = time.perf_counter_ns()
             logger.warning(
-                "[dial-debug] UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms ch_state=%s addr=%s",
+                "UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms ch_state=%s addr=%s",
                 (t_fail - t_dial0) / 1e6,
                 (t_fail - t_pre_stream) / 1e6,
                 _ch_state(comm._channel),  # ruff: ignore[private-member-access]

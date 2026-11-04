@@ -66,6 +66,7 @@ class ChatHistoryTools(DkToolkit):
             name="chat_history_tools",
             tools=[self.outline_chat_history, self.read_chat_messages],
             context=context,
+            display_name="Chat history",
         )
         self._session_id = session_id
         # Late-bound to the runtime Agent (single mode) or Team (team mode).
@@ -154,8 +155,7 @@ class ChatHistoryTools(DkToolkit):
         elif requested is None and total > end:
             output["note"] = f"showing {page} of {total} messages; pass first/last/offset to page."
         if "note" in output:
-            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
-            logger.info("[VALIDATE CHAT-HISTORY-CAP] outline_chat_history: %s", output["note"])
+            logger.info("outline_chat_history: %s", output["note"])
         return self._ok(output, tool="outline_chat_history")
 
     async def read_chat_messages(
@@ -186,14 +186,12 @@ class ChatHistoryTools(DkToolkit):
         notes: list[str] = []
         cap = self._MAX_READ_IDS
         if len(ids) > cap:
-            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
-            logger.info("[VALIDATE CHAT-HISTORY-CAP] read_chat_messages dropped ids beyond %d: %s", cap, ids[cap:])
+            logger.info("read_chat_messages dropped ids beyond %d: %s", cap, ids[cap:])
             notes.append(f"only the first {cap} of {len(ids)} ids were read; request the rest separately.")
             ids = ids[:cap]
         if max_content_chars > self._MAX_CONTENT_CHARS:
-            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
             logger.info(
-                "[VALIDATE CHAT-HISTORY-CAP] max_content_chars %d capped at %d",
+                "max_content_chars %d capped at %d",
                 max_content_chars,
                 self._MAX_CONTENT_CHARS,
             )

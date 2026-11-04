@@ -26,6 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError, create_model, fiel
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.logger import logger
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError, RegistryServiceError
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.utils.proto_utils import ProtoUtils
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from digitalkin.models.module import ModuleContext
-    from digitalkin.models.services.registry import RegistryModuleType
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
     from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy
 
@@ -59,8 +59,11 @@ class BaseAction(BaseModel, ABC, Generic[CtxT]):
     Each concrete action declares an ``action`` ``Literal`` discriminator, carries its
     parameters as fields, and implements :meth:`execute`, which runs it against its manager's
     context ``CtxT`` and returns the raw result. Abstract, so it is never a valid discriminator
-    target and is never instantiated.
+    target and is never instantiated. ``display_name`` is the action's user-facing label; it is
+    a class variable, so it never enters the schema sent to the LLM.
     """
+
+    display_name: ClassVar[str | None] = None
 
     @abstractmethod
     async def execute(self, ctx: CtxT) -> Any:
@@ -94,8 +97,8 @@ class RegistryActionCtx(BaseActionCtx):
     async def validate_content(self, module_id: str, content: dict[str, Any]) -> None:
         """Validate ``content`` against the module's config schema before a write (best-effort).
 
-        No-op when no context is wired or the schema can't be fetched (the module's own
-        ``ConfigSetupModule`` stays the authoritative backstop). When the schema IS available and
+        No-op when no context is wired, for a service, or when the schema can't be fetched (the
+        module's own ``ConfigSetupModule`` stays the authoritative backstop). When the schema IS available and
         the content doesn't match, raises so the dispatcher returns a correctable fail envelope.
 
         Args:
@@ -105,7 +108,9 @@ class RegistryActionCtx(BaseActionCtx):
         Raises:
             ValueError: The content is missing a required field or has a wrong-typed one.
         """
-        if self.context is None:
+        # A service's content is free-form JSON kept by the setup service: its backing module runs
+        # no server, so asking it for a schema dials a registry address nothing listens on.
+        if self.context is None or self.module_type == RegistryModuleType.SERVICE:
             return
         try:
             schema = await self.context.get_module_config_schema(module_id)
@@ -249,6 +254,7 @@ class RegistryObjectToolKit(DkToolkit):
         actions: Any,
         description: str,
         entrypoint: Any,
+        display_name: str,
     ) -> None:
         """Initialize the toolkit with the module's setup and registry services.
 
@@ -260,8 +266,10 @@ class RegistryObjectToolKit(DkToolkit):
             actions: The discriminated action union this manager dispatches.
             description: The LLM-facing tool description.
             entrypoint: The bound ``manage_*`` method Agno calls (delegates to :meth:`_run`).
+            display_name: The manager's user-facing label.
         """
         self._name = name
+        self._actions = actions
         self._ctx_data = RegistryActionCtx(
             setup=setup, registry=registry, module_type=self.module_type, context=context
         )
@@ -277,7 +285,19 @@ class RegistryObjectToolKit(DkToolkit):
             entrypoint=entrypoint,
             skip_entrypoint_processing=True,
         )
-        super().__init__(name=name, tools=[tool], context=context)
+        super().__init__(name=name, tools=[tool], context=context, display_name=display_name)
+
+    def display_labels(self, function_name: str, tool_args: dict[str, Any] | str | None) -> tuple[str, str | None]:  # ruff: ignore[unused-method-argument]
+        """Label the manager and the action this call selects.
+
+        Args:
+            function_name: Technical name of the called function (the manager's single tool).
+            tool_args: Call arguments carrying the ``action`` discriminator.
+
+        Returns:
+            ``(manager label, action label)``.
+        """
+        return self.display_name, self.action_label(tool_args, self._actions)
 
     async def _run(self, action: Any = None, **fields: Any) -> str:
         """Validate a raw discriminated action then dispatch it.
@@ -382,9 +402,7 @@ class RegistryObjectToolKit(DkToolkit):
             # Rendering it would put the feature on their surface.
             version = data.get("current_setup_version")
             if isinstance(version, dict) and "structure" in version and version["structure"] is None:
-                logger.info(
-                    "[VALIDATE STRUCTREAD] uncarried structure omitted: setup_id=%s", data.get("id")
-                )  # TODO(validate): remove after prod validation
+                logger.info("uncarried structure omitted: setup_id=%s", data.get("id"))
                 del version["structure"]
             return data
         if isinstance(value, ProtoMessage):

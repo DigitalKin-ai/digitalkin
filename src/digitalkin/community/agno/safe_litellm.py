@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
@@ -40,7 +40,9 @@ from pydantic import BaseModel
 
 from digitalkin.community.litellm.cost import CostTrackingLogger
 from digitalkin.community.litellm.registry import LiteLLMRegistry
+from digitalkin.community.litellm.settings import get_litellm_settings
 from digitalkin.logger import logger
+from digitalkin.models.events import ModelInfo
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,6 +71,7 @@ class SafeLiteLLM(LiteLLM):
         drop_image_urls: Latched when the provider cannot fetch an image URL: later requests of this
             instance keep inline images and drop only the ones sent by URL.
         compactor: Folds the replayed history at its threshold. Head models only.
+        cache_control: The Anthropic cache marker, with ``ttl`` when ``LITELLM_PROMPT_CACHE_TTL`` is set.
         input_tokens: Input budget: the context window minus the output reserved by ``max_tokens``.
             The last-resort trim fits the request into it; None falls back to litellm's own
             window for the model id, unknown for most proxy model groups.
@@ -84,6 +87,7 @@ class SafeLiteLLM(LiteLLM):
     drop_images: bool = False
     drop_image_urls: bool = False
     compactor: HistoryCompactor | None = None
+    cache_control: dict[str, str] = field(default_factory=lambda: {"type": "ephemeral"})
     input_tokens: int | None = None
 
     # Image parts of the request the current asyncio task is sending. One model can serve two calls
@@ -92,6 +96,9 @@ class SafeLiteLLM(LiteLLM):
     _request_image_parts: ClassVar[ContextVar[tuple[int, int]]] = ContextVar(
         "safe_litellm_request_image_parts", default=(0, 0)
     )
+    # Id of the streamed response whose served model this task already reported. The proxy repeats
+    # its headers on every chunk; the model is reported once per LLM call.
+    _model_reported_for: ClassVar[ContextVar[str | None]] = ContextVar("safe_litellm_model_reported_for", default=None)
 
     @classmethod
     def from_spec(
@@ -146,6 +153,11 @@ class SafeLiteLLM(LiteLLM):
         )
         config = LiteLLMRegistry.shared().config
         capacity = model_spec.capacity
+        cache_ttl = get_litellm_settings().prompt_cache_ttl
+        headers = dict(extra_headers or {})
+        if session_id:
+            # The proxy's session affinity reads the header only, never the body field.
+            headers["x-litellm-session-id"] = session_id
         return cls(
             id=model_spec.name,
             api_base=config.base_url,
@@ -157,8 +169,9 @@ class SafeLiteLLM(LiteLLM):
             enable_prompt_caching=enable_prompt_caching,
             cancel_event=cancel_event,
             compactor=compactor,
+            cache_control={"type": "ephemeral", "ttl": cache_ttl} if cache_ttl else {"type": "ephemeral"},
             input_tokens=capacity.input_budget or None,
-            extra_headers=extra_headers or {},
+            extra_headers=headers,
             extra_body={"litellm_session_id": session_id} if session_id else None,
             request_params=request_params,
         )
@@ -241,6 +254,7 @@ class SafeLiteLLM(LiteLLM):
         """
         self._raise_on_refusal(response)
         model_response = super()._parse_provider_response(response, **kwargs)
+        self._report_served_model(model_response, response, streamed=False)
         citations = self._url_citations(response.choices[0].message.get("annotations"))
         if citations is not None:
             model_response.citations = citations
@@ -257,11 +271,56 @@ class SafeLiteLLM(LiteLLM):
         """
         self._raise_on_refusal(response_delta)
         model_response = super()._parse_provider_response_delta(response_delta)
+        self._report_served_model(model_response, response_delta, streamed=True)
         if response_delta.choices:
             citations = self._url_citations(response_delta.choices[0].delta.get("annotations"))
             if citations is not None:
                 model_response.citations = citations
         return model_response
+
+    def _served_model(self, response: Any) -> ModelInfo | None:
+        """Read which model group of the LiteLLM proxy answered, from its response headers.
+
+        The proxy stamps ``x-litellm-model-group`` with the group that served the call (the
+        fallback group after a fallback), read by :meth:`LiteLLMRegistry.served_route`. The body's
+        ``model`` cannot be trusted: on a stream the proxy restamps every chunk with the requested
+        model, fallback or not. A fallback is a served group other than the requested one (``self.id``).
+
+        Args:
+            response: A litellm completion or streaming chunk.
+
+        Returns:
+            The served model, or None when the response carries no proxy headers.
+        """
+        group, _ = LiteLLMRegistry.shared().served_route(response)
+        if not group:
+            return None
+        return ModelInfo(name=group, requested_name=self.id if group != self.id else None)
+
+    def _report_served_model(self, model_response: ModelResponse, response: Any, *, streamed: bool) -> None:
+        """Put the served model in ``provider_data``, once per LLM call.
+
+        agno forwards ``provider_data`` on ``RunContentEvent.model_provider_data`` (even on a
+        delta with no text, so a call that only requests tools still reports its model), and the
+        stream adapter labels the messages and tool calls that follow with it.
+
+        Args:
+            model_response: The parsed response or delta, updated in place.
+            response: The raw litellm completion or chunk.
+            streamed: Whether ``response`` is one chunk of a stream.
+        """
+        response_id = getattr(response, "id", None) if streamed else None
+        if response_id is not None and self._model_reported_for.get() == response_id:
+            return
+        served = self._served_model(response)
+        if served is None:
+            return
+        if response_id is not None:
+            self._model_reported_for.set(response_id)
+        model_response.provider_data = {
+            **(model_response.provider_data or {}),
+            ModelInfo.PROVIDER_DATA_KEY: served.model_dump(),
+        }
 
     @staticmethod
     def _url_citations(annotations: Any) -> Citations | None:
@@ -467,7 +526,7 @@ class SafeLiteLLM(LiteLLM):
                 raise
             sent = refit
             response = await self._ainvoke_once(sent, assistant_message, kwargs)
-        await self._observe(sent, kwargs, response.response_usage)
+        await self._observe(sent, kwargs, response.response_usage, response.provider_data)
         return response
 
     async def _ainvoke_stream_fitting(
@@ -489,11 +548,13 @@ class SafeLiteLLM(LiteLLM):
         """
         sent = await self._compacted(messages, kwargs)
         usage: MessageMetrics | None = None
+        provider_data: dict[str, Any] | None = None
         streamed = False
         try:
             async for chunk in self._ainvoke_stream_once(sent, assistant_message, kwargs):
                 streamed = True
                 usage = chunk.response_usage or usage
+                provider_data = chunk.provider_data or provider_data
                 yield chunk
         except BadRequestError as exc:
             refit = None if streamed else await self._refit_after_overflow(exc, messages, kwargs)
@@ -502,19 +563,31 @@ class SafeLiteLLM(LiteLLM):
             sent = refit
             async for chunk in self._ainvoke_stream_once(sent, assistant_message, kwargs):
                 usage = chunk.response_usage or usage
+                provider_data = chunk.provider_data or provider_data
                 yield chunk
-        await self._observe(sent, kwargs, usage)
+        await self._observe(sent, kwargs, usage, provider_data)
 
-    async def _observe(self, sent: list[Message], kwargs: dict[str, Any], usage: MessageMetrics | None) -> None:
-        """Hand the provider's prompt size of a request to the compactor, which calibrates on it.
+    async def _observe(
+        self,
+        sent: list[Message],
+        kwargs: dict[str, Any],
+        usage: MessageMetrics | None,
+        provider_data: dict[str, Any] | None,
+    ) -> None:
+        """Hand the provider's prompt size of a request to the compactor.
 
         Args:
             sent: The messages as sent.
             kwargs: The remaining ``ainvoke`` arguments.
             usage: The response usage; LiteLLM's ``prompt_tokens`` already counts cached tokens.
+            provider_data: The response's provider data, naming the served model; a fallback's count
+                is not calibrated on.
         """
-        if self.compactor is not None and usage is not None and usage.input_tokens:
-            await self.compactor.observe(sent, kwargs.get("tools"), usage.input_tokens)
+        if self.compactor is None or usage is None or not usage.input_tokens:
+            return
+        served = (provider_data or {}).get(ModelInfo.PROVIDER_DATA_KEY)
+        fallback = isinstance(served, dict) and served.get("requested_name") is not None
+        await self.compactor.observe(sent, kwargs.get("tools"), usage.input_tokens, calibrate=not fallback)
 
     async def _ainvoke_once(
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
@@ -685,7 +758,7 @@ class SafeLiteLLM(LiteLLM):
         if not self.send_temperature:
             params.pop("temperature", None)
         if self.enable_prompt_caching and tools:
-            params["tools"] = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
+            params["tools"] = [*tools[:-1], {**tools[-1], "cache_control": self.cache_control}]
         return params
 
     def _format_messages(
@@ -884,13 +957,12 @@ class SafeLiteLLM(LiteLLM):
         if marked:
             last = marked[-1]
             if last.get("role") == "tool":
-                marked[-1] = {**last, "cache_control": {"type": "ephemeral"}}
+                marked[-1] = {**last, "cache_control": self.cache_control}
             elif last.get("role") == "user":
                 marked[-1] = {**last, "content": self._as_cached_blocks(last.get("content"))}
         return marked
 
-    @staticmethod
-    def _as_cached_blocks(content: Any) -> list[dict[str, Any]]:
+    def _as_cached_blocks(self, content: Any) -> list[dict[str, Any]]:
         """Turn message content into blocks whose last text block carries the cache marker.
 
         Args:
@@ -904,6 +976,6 @@ class SafeLiteLLM(LiteLLM):
         )
         for block in reversed(blocks):
             if block.get("type") == "text":
-                block["cache_control"] = {"type": "ephemeral"}
+                block["cache_control"] = self.cache_control
                 break
         return blocks

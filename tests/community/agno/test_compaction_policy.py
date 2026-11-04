@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("agno", reason="optional agno dependency not installed")
 
 from digitalkin.community.agno import compaction as compaction_mod
-from digitalkin.community.agno.compaction import HistoryCompactor, get_compaction_settings
+from digitalkin.community.agno.compaction import ContextSize, HistoryCompactor, get_compaction_settings
 from digitalkin.community.litellm import CapacityInfo
 
 _VARS = ("ENABLED", "MAX_TOKENS", "WINDOW_RATIO", "UNCOMPACTED_RUNS", "SUMMARY_MODEL")
@@ -60,13 +60,13 @@ class TestSettings:
         settings = get_compaction_settings()
 
         assert settings.enabled is True
-        assert (settings.max_tokens, settings.window_ratio, settings.uncompacted_runs) == (600_000, 0.9, 5)
+        assert (settings.window_ratio, settings.uncompacted_runs) == (0.9, 5)
         assert settings.summary_model == "claude-haiku-5.5"
 
     def test_reads_the_prefixed_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set(monkeypatch, "MAX_TOKENS", "20000")
+        _set(monkeypatch, "WINDOW_RATIO", "0.5")
 
-        assert get_compaction_settings().max_tokens == 20_000
+        assert get_compaction_settings().window_ratio == 0.5
 
 
 class TestLoadSummaryModel:
@@ -127,9 +127,21 @@ class TestForModel:
         )
         return built
 
-    def _compactor(self, model: Mock, summary: Mock | None = None, headers: dict[str, str] | None = None) -> Any:
+    def _compactor(
+        self,
+        model: Mock,
+        summary: Mock | None = None,
+        headers: dict[str, str] | None = None,
+        context_size: ContextSize | None = None,
+    ) -> Any:
         return HistoryCompactor.for_model(
-            model, summary_spec=summary, db=Mock(), session_id="s1", mission_id="mission-1", extra_headers=headers or {}
+            model,
+            summary_spec=summary,
+            db=Mock(),
+            session_id="s1",
+            mission_id="mission-1",
+            extra_headers=headers or {},
+            context_size=context_size,
         )
 
     def test_disabled_compaction_builds_no_summarizer(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,7 +158,7 @@ class TestForModel:
         compactor = self._compactor(self._spec(), haiku)
 
         assert built[0][0] is haiku
-        assert compactor.compaction.compact_at_tokens == 600_000, "the threshold still follows the agent's model"
+        assert compactor.compaction.compact_at_tokens == 900_000, "the threshold still follows the agent's model"
         assert compactor.compaction.summarize_char_budget == 400_000, "the read follows the summarizer's window"
 
     def test_without_a_summary_model_the_agents_model_writes_them(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,15 +181,23 @@ class TestForModel:
         assert kwargs["temperature"] == 0.2
 
     def test_policy_comes_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set(monkeypatch, "MAX_TOKENS", "20000")
+        _set(monkeypatch, "WINDOW_RATIO", "0.5")
         _set(monkeypatch, "UNCOMPACTED_RUNS", "2")
         self._record_models(monkeypatch)
 
         compactor = self._compactor(self._spec())
 
-        assert compactor.threshold_tokens == 20_000
+        assert compactor.threshold_tokens == 500_000
         assert compactor.compaction.uncompacted_runs == 2
         assert compactor.compaction.store_compacted_messages is False
+
+    def test_the_setup_size_overrides_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set(monkeypatch, "WINDOW_RATIO", "0.5")
+        self._record_models(monkeypatch)
+
+        compactor = self._compactor(self._spec(), context_size=ContextSize.MEDIUM)
+
+        assert compactor.threshold_tokens == 700_000
 
     def test_the_output_is_reserved_in_the_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Input plus max_tokens must fit the window: the threshold leaves the output room."""
