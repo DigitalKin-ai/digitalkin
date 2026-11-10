@@ -137,11 +137,11 @@ class DefaultCost(CostStrategy):
             if (not names or cost.name in names) and (not cost_types or cost.cost_type.name in cost_types)
         ]
         logger.info(
-            "[VALIDATE COSTFILTER] default costs AND-filtered: names=%s types=%s matched=%d",
+            "default costs AND-filtered: names=%s types=%s matched=%d",
             names,
             cost_types,
             len(costs),
-        )  # TODO(validate): remove after prod validation
+        )
         return costs
 
     async def get_cost_config(self) -> list[CostConfig]:

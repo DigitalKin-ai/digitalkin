@@ -159,7 +159,7 @@ async def test_long_task_logs_ttl_refresh_marker_once(monkeypatch: Any) -> None:
         await _run_with(_RecordingRedis(), _run_instance, "t-long")
     get_gateway_settings.cache_clear()
 
-    marks = [c.args[0] for c in log.info.call_args_list if "[VALIDATE TTL-REFRESH]" in c.args[0]]
+    marks = [c.args[0] for c in log.info.call_args_list if "EOS written after" in c.args[0]]
     assert len(marks) == 1
 
 

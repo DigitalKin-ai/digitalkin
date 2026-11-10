@@ -1,6 +1,7 @@
 """LiteLLM proxy settings."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,10 @@ class LiteLLMSettings(BaseSettings):
         default=SecretStr(""),
         description="Bearer token for the LiteLLM proxy.",
         json_schema_extra={"env_example": "sk-xxxx", "env_required": True},
+    )
+    prompt_cache_ttl: Literal["", "5m", "1h"] = Field(
+        default="",
+        description="Anthropic prompt-cache TTL on the cache markers (1h); empty keeps the provider's 5 minutes.",
     )
 
 

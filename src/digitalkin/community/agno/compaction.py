@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -45,20 +46,25 @@ if TYPE_CHECKING:
     from digitalkin.community.litellm import ModelSpec
 
 
+class ContextSize(Enum):
+    """Share of the model's input budget the replayed history may fill before it is folded."""
+
+    LARGE = 0.9
+    MEDIUM = 0.7
+    SMALL = 0.5
+
+
 class CompactionSettings(BaseSettings):
     """When a head model folds its replayed history into a summary, and which model writes it."""
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_COMPACTION_", case_sensitive=False)
 
     enabled: bool = Field(default=True, description="Compact the replayed history at the token threshold.")
-    max_tokens: int = Field(
-        default=600_000, gt=0, description="Context size (tokens) that triggers compaction on large-window models."
-    )
     window_ratio: float = Field(
-        default=0.9,
+        default=ContextSize.LARGE.value,
         gt=0,
         le=1,
-        description="Share of the model's input budget the threshold is capped at on smaller models.",
+        description="Share of the model's input budget that triggers compaction, unless the setup picks a ContextSize.",
     )
     uncompacted_runs: int = Field(default=5, ge=0, description="Recent runs kept verbatim after a compaction.")
     summary_model: str = Field(
@@ -247,7 +253,8 @@ class HistoryCompactor:
 
     Built per task with its model, so the cached record and the "already measured" set live as
     long as the task's requests. The threshold is measured once per distinct history, i.e. once
-    per run: within a run the replayed history does not change, only the current run grows.
+    per run: within a run the replayed history does not change, only the current run grows. That
+    growth is caught on the provider's count of each response, which folds the history mid-run.
 
     Attributes:
         compaction: The fold policy, with its summarizer model.
@@ -288,27 +295,26 @@ class HistoryCompactor:
         self._calibrated = False
         self._loaded = False
         self._measured: set[tuple[Any, ...]] = set()
+        # The provider's count of the last response, and the history last folded because of it.
+        self._last_provider_tokens: int | None = None
+        self._outgrown: tuple[Any, ...] | None = None
         # One model can serve concurrent calls; two of them must not both fold the same history.
         self._lock = asyncio.Lock()
 
     @staticmethod
-    def threshold(context_window: int, max_tokens: int, window_ratio: float) -> int:
+    def threshold(context_window: int, window_ratio: float) -> int:
         """Context size, in tokens, at which the replayed history is folded.
 
-        ``max_tokens`` on large-window models, ``window_ratio`` of the window on smaller ones, so a
-        fold always comes before the provider's limit.
-
         Args:
-            context_window: The model's input window; 0 when unknown.
-            max_tokens: The threshold cap.
-            window_ratio: Share of the window the threshold may reach.
+            context_window: The model's input budget; 0 when unknown.
+            window_ratio: Share of the budget the context may fill.
 
         Returns:
-            The threshold in tokens.
+            The threshold in tokens; 200k for an unknown window.
         """
         if context_window <= 0:
-            return max_tokens
-        return max(1, min(max_tokens, int(context_window * window_ratio)))
+            return 200_000
+        return max(1, int(context_window * window_ratio))
 
     @staticmethod
     def split_request(messages: list[Message]) -> tuple[list[Message], list[Message], list[Message]]:
@@ -343,7 +349,6 @@ class HistoryCompactor:
         db: StorageDb,
         session_id: str,
         model_id: str,
-        max_tokens: int,
         window_ratio: float,
         uncompacted_runs: int,
         max_output: int = 0,
@@ -360,8 +365,7 @@ class HistoryCompactor:
             db: Storage of the session's compaction record.
             session_id: The session whose history is folded.
             model_id: Id of the head model.
-            max_tokens: Threshold cap (see ``threshold``).
-            window_ratio: Share of a smaller window the threshold may reach.
+            window_ratio: Share of the input budget that triggers a fold (see ``threshold``).
             uncompacted_runs: Recent runs kept verbatim after a fold.
             max_output: Output the head model may request, reserved in its window: the provider
                 rejects a request whose input plus ``max_tokens`` exceeds it.
@@ -369,7 +373,7 @@ class HistoryCompactor:
         Returns:
             The compactor.
         """
-        threshold_tokens = cls.threshold(context_window - max_output, max_tokens, window_ratio)
+        threshold_tokens = cls.threshold(context_window - max_output, window_ratio)
         compaction = DkCompaction(
             model=summarizer,
             compact_at_tokens=threshold_tokens,
@@ -456,6 +460,7 @@ class HistoryCompactor:
         mission_id: str,
         extra_headers: dict[str, str],
         cancel_event: asyncio.Event | None = None,
+        context_size: ContextSize | None = None,
     ) -> HistoryCompactor | None:
         """The compactor of a head model, under ``CompactionSettings``.
 
@@ -467,6 +472,7 @@ class HistoryCompactor:
             mission_id: The mission the summaries' cost is booked to.
             extra_headers: The head model's proxy headers.
             cancel_event: Stops the summarizer with the run.
+            context_size: Fold point picked by the module's setup; ``window_ratio`` when None.
 
         Returns:
             The compactor, or None when ``DIGITALKIN_COMPACTION_ENABLED`` is off.
@@ -488,8 +494,7 @@ class HistoryCompactor:
             db=db,
             session_id=session_id,
             model_id=model_spec.name,
-            max_tokens=settings.max_tokens,
-            window_ratio=settings.window_ratio,
+            window_ratio=context_size.value if context_size is not None else settings.window_ratio,
             uncompacted_runs=settings.uncompacted_runs,
             max_output=model_spec.capacity.context_window - model_spec.capacity.input_budget,
         )
@@ -556,6 +561,27 @@ class HistoryCompactor:
                     )
                     if self.compaction.should_compact(in_context, context_tokens=tokens):
                         record = await self._fold(prefix, history, in_context, tools, tokens, run_response) or record
+                elif (
+                    self._last_provider_tokens is not None
+                    and self._last_provider_tokens >= self.threshold_tokens
+                    and signature != self._outgrown
+                ):
+                    # Folded at most once per history: a run whose own messages fill the context
+                    # would otherwise be summarized on every call.
+                    self._outgrown = signature
+                    # TODO(validate): COMPACTION-MID-RUN-FOLD a tool loop past the threshold folds the history mid-run
+                    logger.info(
+                        "[VALIDATE COMPACTION-MID-RUN-FOLD] Run outgrew the threshold, folding mid-run: "
+                        "session=%s model=%s provider=%d threshold=%d",
+                        self.session_id,
+                        self.model_id,
+                        self._last_provider_tokens,
+                        self.threshold_tokens,
+                    )
+                    record = (
+                        await self._fold(prefix, history, self._apply(history, record), tools, None, run_response)
+                        or record
+                    )
         except Exception:
             logger.exception(
                 "History compaction failed, sending the history uncompacted: session=%s model=%s",
@@ -595,18 +621,36 @@ class HistoryCompactor:
             return None
         return [*prefix, *self._apply(history, new_record), *current]
 
-    async def observe(self, sent: list[Message], tools: list[Any] | None, provider_tokens: int) -> None:
-        """Calibrate the estimate on the provider's count of a request that was just sent.
+    async def observe(
+        self, sent: list[Message], tools: list[Any] | None, provider_tokens: int, *, calibrate: bool = True
+    ) -> None:
+        """Record the provider's count of a request that was just sent, and calibrate on it.
 
-        Once per compactor, i.e. once per run: the first response is enough, and estimating every
-        request of a long tool loop would cost a full tokenization each time. Never raises.
+        Every count is kept for the mid-run fold. The calibration runs once per compactor, i.e. once
+        per run: the first response is enough, and estimating every request of a long tool loop would
+        cost a full tokenization each time. Never raises.
 
         Args:
             sent: The messages of the request, as sent.
             tools: The request's tool definitions.
             provider_tokens: The prompt size the provider reported for it.
+            calibrate: False for a fallback model's response: its tokenizer is not the head model's,
+                and the samples are stored with the session.
         """
-        if self._calibrated or provider_tokens <= 0:
+        if provider_tokens <= 0:
+            return
+        self._last_provider_tokens = provider_tokens
+        if self._calibrated:
+            return
+        if not calibrate:
+            # TODO(validate): CALIBRATION-SKIP-FALLBACK a fallback model's count never calibrates the session
+            logger.info(
+                "[VALIDATE CALIBRATION-SKIP-FALLBACK] Fallback response not used to calibrate: "
+                "session=%s model=%s provider=%d",
+                self.session_id,
+                self.model_id,
+                provider_tokens,
+            )
             return
         self._calibrated = True
         try:  # ruff: ignore[too-many-statements-in-try-clause]
@@ -722,6 +766,8 @@ class HistoryCompactor:
         if new_record is None:
             return None
         self._record = new_record
+        # That count was for the unfolded request.
+        self._last_provider_tokens = None
         stored = await self.db.upsert_compaction_record(self.session_id, self._stored())
         logger.info(
             "History compacted: session=%s model=%s messages=%d tokens %s -> %s stored=%s",
