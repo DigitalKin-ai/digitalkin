@@ -413,7 +413,9 @@ class ModuleContext:
                 extra=self.session.current_ids(),
             )
             return None
-        tool_info = await ToolModuleInfo.from_module_info(info, setup_id, setup.name, self.communication)
+        tool_info = await ToolModuleInfo.from_module_info(
+            info, setup_id, setup.name, self.communication, setup_config=setup.config
+        )
         # Mission-scoped layer, never ``declared``: the declared layer is the object the
         # servicer shares with every other mission of this setup, so writing a runtime
         # load there makes it reappear in unrelated conversations.

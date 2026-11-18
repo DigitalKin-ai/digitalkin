@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
+from digitalkin.models.module.setup_tools import parameters_schema, read_setup_tools
 from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.utils.llm_ready_schema import LlmReadySchema
 
@@ -31,6 +32,8 @@ class ToolDefinition(BaseModel):
         description: Tool description (from trigger docstring).
         parameters_schema: JSON Schema object describing the tool's parameters.
         display_name: Human label of the function (trigger ``display_name``), if declared.
+        trigger: For a function the setup adds (:mod:`~digitalkin.models.module.setup_tools`), the module
+            trigger that serves it. ``None`` for a module trigger, which serves itself.
     """
 
     name: str
@@ -39,6 +42,20 @@ class ToolDefinition(BaseModel):
     parameters_schema: dict[str, Any] = Field(
         default_factory=lambda: {"type": "object", "properties": {}, "required": []}
     )
+    trigger: str | None = None
+
+    def enabled_by(self, triggers: set[str]) -> bool:
+        """Whether a tool selection enabling ``triggers`` keeps this function.
+
+        A module trigger is kept when it is enabled, a setup function when its serving trigger is.
+
+        Args:
+            triggers: Trigger names enabled in the tool selection.
+
+        Returns:
+            True when the function stays available.
+        """
+        return (self.trigger or self.name) in triggers
 
     @property
     def parameter_names(self) -> set[str]:
@@ -87,6 +104,7 @@ class ToolModuleInfo(ModuleInfo):
         communication: "CommunicationStrategy",
         *,
         llm_format: bool = True,
+        setup_config: dict[str, Any] | None = None,
     ) -> "ToolModuleInfo":
         """Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
 
@@ -96,9 +114,11 @@ class ToolModuleInfo(ModuleInfo):
             tool_name: Name of the tool.
             communication: Communication strategy for gRPC calls.
             llm_format: Use LLM-friendly schema format.
+            setup_config: The setup's content (``SetupInfo.config``). Its setup tools
+                (:mod:`~digitalkin.models.module.setup_tools`) are added after the module's triggers.
 
         Returns:
-            ToolModuleInfo with tools extracted from input schema.
+            ToolModuleInfo with tools extracted from input schema, plus the setup's own functions.
         """
         schemas = await communication.get_module_schemas(
             module_info.address,
@@ -111,6 +131,9 @@ class ToolModuleInfo(ModuleInfo):
         if llm_format:
             input_schema = input_schema.get("json_schema", input_schema)
 
+        tools = cls.extract_tools_from_schema(input_schema)
+        tools.extend(cls.setup_tool_definitions(setup_config, tool_name, {t.name for t in tools}))
+
         return cls(
             module_id=module_info.module_id,
             module_type=module_info.module_type,
@@ -120,11 +143,39 @@ class ToolModuleInfo(ModuleInfo):
             module_name=module_info.module_name,
             documentation=module_info.documentation,
             status=module_info.status,
-            tools=cls.extract_tools_from_schema(input_schema),
+            tools=tools,
             setup_id=setup_id,
             tool_name=tool_name,
             cost_config=schemas.get("cost", {}),
         )
+
+    @classmethod
+    def setup_tool_definitions(
+        cls,
+        setup_config: dict[str, Any] | None,
+        tool_name: str,
+        module_triggers: set[str],
+    ) -> list[ToolDefinition]:
+        """Build the functions a setup declares in its content.
+
+        Args:
+            setup_config: The setup's content.
+            tool_name: Name of the setup, whose slug prefixes the function names.
+            module_triggers: The module's trigger names, which a setup function may not reuse.
+
+        Returns:
+            One ToolDefinition per usable setup tool.
+        """
+        return [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                display_name=tool.title,
+                parameters_schema=parameters_schema(tool.input_schema),
+                trigger=tool.trigger,
+            )
+            for tool in read_setup_tools(setup_config, prefix=cls._slugify(tool_name), reserved=module_triggers)
+        ]
 
     @staticmethod
     def _build_parameters_from_schema(def_schema: dict[str, Any]) -> dict[str, Any]:

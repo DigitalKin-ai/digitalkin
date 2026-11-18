@@ -117,7 +117,7 @@ class ToolReference(BaseModel):
             if not enabled:
                 return tool_info
             return tool_info.model_copy(
-                update={"tools": [t for t in tool_info.tools if t.name in enabled]},
+                update={"tools": [t for t in tool_info.tools if t.enabled_by(enabled)]},
             )
 
         results = await asyncio.gather(*(_bounded(e) for e in self.selected_tools if e.setup_id.strip()))
@@ -173,6 +173,7 @@ class ToolReference(BaseModel):
                 entry.setup_id,
                 setup.name,
                 communication,
+                setup_config=setup.config,
             )
         except Exception:
             logger.exception(
@@ -193,7 +194,9 @@ class ToolReference(BaseModel):
                 sorted(available),
             )
 
-        post_count = len(available & enabled_triggers) if enabled_triggers else len(tool_info.tools)
+        post_count = (
+            sum(t.enabled_by(enabled_triggers) for t in tool_info.tools) if enabled_triggers else len(tool_info.tools)
+        )
         logger.debug(
             "[perf] tool_resolve: setup_id=%s slug=%s "
             "user_triggers_enabled=%d user_triggers_total=%d "

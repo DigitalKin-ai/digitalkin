@@ -17,6 +17,7 @@ from digitalkin.models.module.module_types import (
 )
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.select_schema import SelectSchema
+from digitalkin.models.module.setup_tools import SETUP_TOOLS_KEY, SetupTool
 from digitalkin.models.module.tool_cache import (
     ToolCache,
     ToolDefinition,
@@ -36,6 +37,7 @@ from digitalkin.models.module.utility import (
 
 __all__ = [
     "LOADED_TOOLS_STORAGE_CONFIG",
+    "SETUP_TOOLS_KEY",
     "DataModel",
     "DataTrigger",
     "EndOfStreamOutput",
@@ -46,6 +48,7 @@ __all__ = [
     "RequestMetadata",
     "SelectSchema",
     "SetupModel",
+    "SetupTool",
     "StreamCancelledOutput",
     "ToolCache",
     "ToolDefinition",

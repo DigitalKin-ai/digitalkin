@@ -108,7 +108,7 @@ class ModuleToolkit(DkToolkit):
         tool_functions = context.create_tool_functions(tool_module_info.setup_id)
 
         if allowed_tools is not None:
-            tool_functions = [(td, fn) for td, fn in tool_functions if td.name in allowed_tools]
+            tool_functions = [(td, fn) for td, fn in tool_functions if td.enabled_by(allowed_tools)]
 
         fn_names = sorted(td.name for td, _ in tool_functions)
         logger.info(

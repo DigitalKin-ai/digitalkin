@@ -104,6 +104,39 @@ It takes a `digitalkin.models.events` event (`RunStartedEvent`, `RunContentEvent
 It converts the event to `AgUiOutput` frames and manages run state.
 The wire contract is in [agui_events.md](agui_events.md).
 
+### Functions per setup
+
+A module whose operations depend on the setup (an MCP server, an OpenAPI spec) cannot list them as triggers: triggers are
+the same for every setup, and an agent asks the module for its schema without saying which setup it means. Such a module
+stores the operations it finds in its setup content, under `SETUP_TOOLS_KEY` (`"setup_tools"`), as a list of
+`SetupTool`:
+
+```python
+from digitalkin.models.module import SetupTool
+
+class MySetup(SetupModel):
+    url: str
+    setup_tools: list[SetupTool] = Field(default_factory=list, json_schema_extra={"ui:widget": "hidden"})
+
+async def run_config_setup(self, context, config_setup_data):
+    config_setup_data.setup_tools = [
+        SetupTool(name=op.name, title=op.title, description=op.doc, input_schema=op.schema, trigger="call_tool")
+        for op in await list_operations(config_setup_data.url)
+    ]
+    return config_setup_data
+```
+
+- When an agent resolves the setup, the SDK reads them from the registry's copy of the setup and adds one function per
+  entry after the module's triggers, for that setup only. Other setups of the module do not see them.
+- A call sends `protocol=<name>` and the arguments, like a trigger call. The module routes such protocols, typically by
+  overriding `create_input_model` to rewrite them into the `trigger` input (`call_tool`).
+- `trigger` must be one of the module's triggers; it is the setup function's switch in the tool selection: disabling
+  `call_tool` also removes the functions it serves.
+- An entry is skipped with a warning when it is malformed, when its name is a module trigger or repeats an earlier entry,
+  when its trigger is unknown, or when `<setup slug>__<name>` is not a valid LLM function name (`[A-Za-z0-9_-]`, at most
+  64 characters).
+- The input schema is reduced to `type`, `properties` and `required`, with `$ref`s inlined.
+
 ## Setup and secrets
 
 `SetupModel` fields are filtered by `json_schema_extra`:
