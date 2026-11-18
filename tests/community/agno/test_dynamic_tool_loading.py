@@ -417,6 +417,7 @@ class TestDriveAutoContinue:
         errors = [c.args[0] for c in send.await_args_list if c.args[0].event == AgentRunEvent.RUN_ERROR]
         assert len(errors) == 1
         assert errors[0].error_type == "auto_continue_limit"
+        assert loader.run_paused.await_count == AgnoHitlRunner.MAX_AUTO_CONTINUES == 100
 
 
 class TestRunnerLoaderAutoFind:
