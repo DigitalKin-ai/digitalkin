@@ -602,3 +602,36 @@ class TestGrammarProperties:
     def test_an_encoded_path_decodes_back_to_its_segments(self, segments: list[str | int]) -> None:
         """A map entry renamed after a removal must still be read the way it was meant."""
         assert JsonStructure._decode(JsonStructure._encode(segments)) == segments
+
+
+class TestPlace:
+    """``place`` writes whatever is at the path: push onto a list, replace a value, or create it (DEV-938)."""
+
+    def test_a_list_value_extends_a_list(self) -> None:
+        content: dict[str, Any] = {"items": [1]}
+
+        assert JsonStructure.place(content, "items", [2, 3]) is False
+        assert content == {"items": [1, 2, 3]}
+
+    def test_a_scalar_is_pushed_onto_a_list(self) -> None:
+        content: dict[str, Any] = {"items": [1]}
+
+        JsonStructure.place(content, "items", 2)
+
+        assert content == {"items": [1, 2]}
+
+    def test_an_existing_value_is_replaced(self) -> None:
+        content: dict[str, Any] = {"a": {"b": 1}}
+
+        assert JsonStructure.place(content, "a.b", {"c": 2}) is True
+        assert content == {"a": {"b": {"c": 2}}}
+
+    def test_a_missing_path_is_created(self) -> None:
+        content: dict[str, Any] = {}
+
+        assert JsonStructure.place(content, "a.b", [1, 2]) is False
+        assert content == {"a": {"b": [1, 2]}}
+
+    def test_a_missing_list_index_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="does not exist"):
+            JsonStructure.place({"items": []}, "items[3].name", "x")

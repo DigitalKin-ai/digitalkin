@@ -160,6 +160,34 @@ class JsonStructure:
         del parent[segments[-1]]
 
     @classmethod
+    def place(cls, content: dict[str, Any], path: str, value: Any) -> bool:
+        """Write ``value`` at ``path`` in place, whatever is there.
+
+        A list at ``path`` gets ``value`` pushed onto it (each of its items when ``value`` is a
+        list); another existing value is replaced; a missing path is created as ``append`` does.
+
+        Args:
+            content: The document to edit.
+            path: A key path in the grammar above.
+            value: The JSON value to write.
+
+        Returns:
+            ``True`` when an existing value other than a list was replaced.
+
+        Raises:
+            ValueError: The path is malformed or crosses a list index or a non-object that does not exist.
+        """
+        found, node = cls._walk(content, path)
+        if found and isinstance(node, list):
+            node.extend(value if isinstance(value, list) else [value])
+            return False
+        if found:
+            cls.patch(content, path, value)
+            return True
+        cls.append(content, path, value)
+        return False
+
+    @classmethod
     def forget(cls, structure: dict[str, str], path: str) -> dict[str, str]:
         """Update a map for the removal of the element at ``path``.
 

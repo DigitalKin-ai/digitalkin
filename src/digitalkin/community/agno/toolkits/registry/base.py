@@ -15,6 +15,8 @@ Each manager is then a thin subclass declaring its ``module_type`` and a single
 
 from __future__ import annotations
 
+import asyncio
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
@@ -34,6 +36,8 @@ from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
+
+    from agno.models.base import Model
 
     from digitalkin.models.module import ModuleContext
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
@@ -87,12 +91,36 @@ class RegistryActionCtx(BaseActionCtx):
         module_type: The manager's object type, used to filter searches and tag creates.
         context: Module context; enables pre-write ``content`` validation against the module's
             config schema. ``None`` outside a running job — validation is then skipped.
+        writer: The model that writes ``generate`` sections; ``None`` until the toolkit is bound to a host.
+        locks: One lock per setup id, shared by every manager of the process; an entry lives as
+            long as a write holds or awaits it.
     """
+
+    locks: ClassVar[weakref.WeakValueDictionary[str, asyncio.Lock]] = weakref.WeakValueDictionary()
 
     setup: SetupStrategy
     registry: RegistryStrategy
     module_type: RegistryModuleType
     context: ModuleContext | None = None
+    writer: Model | None = None
+
+    @classmethod
+    def lock(cls, setup_id: str) -> asyncio.Lock:
+        """Return the lock that serializes the read-modify-writes of one setup in this process.
+
+        Args:
+            setup_id: The setup a write is about to read and rewrite.
+
+        Returns:
+            The setup's lock, created on first use.
+        """
+        lock = cls.locks.get(setup_id)
+        if lock is None:
+            lock = cls.locks[setup_id] = asyncio.Lock()
+        elif lock.locked():
+            # TODO(validate): SERVICE-WRITE-LOCK two parallel edits of one service both land
+            logger.info("[VALIDATE SERVICE-WRITE-LOCK] Write on %s waits for another", setup_id)
+        return lock
 
     async def validate_content(self, module_id: str, content: dict[str, Any]) -> None:
         """Validate ``content`` against the module's config schema before a write (best-effort).

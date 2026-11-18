@@ -691,12 +691,15 @@ class TestUnfetchableImageUrls:
 
     @pytest.mark.asyncio
     async def test_a_500_unrelated_to_images_is_raised(self) -> None:
-        client = _FakeClient(
-            litellm.APIConnectionError(message="Error code: 500 - upstream timeout", model="m", llm_provider="p")
-        )
+        """Resent once unchanged as a transient failure, with the images, then raised."""
+        failure = litellm.APIConnectionError(message="Error code: 500 - upstream error", model="m", llm_provider="p")
+        client = _FakeClient(failure, failure)
+        model = _model_with(client, delay_between_retries=0)
 
         with pytest.raises(litellm.APIConnectionError):
-            await _model_with(client).ainvoke(_mixed_turn(), Message(role="assistant"))
+            await model.ainvoke(_mixed_turn(), Message(role="assistant"))
+        assert len(client.requests) == 2
+        assert (model.drop_image_urls, model.drop_images) == (False, False)
 
 
 class TestImageRejectionFallback:
@@ -1190,4 +1193,86 @@ class TestStreamDropRetry:
                 [Message(role="user", content="hi")], Message(role="assistant")
             ):
                 pass
+        assert len(client.requests) == 1
+
+
+class TestNoBlindResend:
+    """A request the proxy cut at its timeout is not resent unchanged; a fast transient failure is (DEV-937).
+
+    litellm's ``num_retries`` resent a 504 twice, so one request too long for the proxy's 120 s
+    cost 6 minutes before failing the same way.
+    """
+
+    @staticmethod
+    def _timeout() -> litellm.Timeout:
+        return litellm.Timeout(message="504 Gateway Time-out", model="gpt-5", llm_provider="litellm_proxy")
+
+    @staticmethod
+    def _unavailable() -> litellm.ServiceUnavailableError:
+        return litellm.ServiceUnavailableError(message="503", model="gpt-5", llm_provider="litellm_proxy")
+
+    @pytest.mark.regression
+    async def test_a_request_cut_by_the_timeout_is_not_resent(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = _FakeClient(self._timeout(), _completion("Unexpected"))
+
+        with caplog.at_level(logging.WARNING), pytest.raises(litellm.Timeout):
+            await _model_with(client, delay_between_retries=0).ainvoke(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            )
+        assert len(client.requests) == 1
+        assert "[VALIDATE NO-TIMEOUT-RESEND]" in caplog.text
+
+    @pytest.mark.regression
+    async def test_a_streamed_request_cut_by_the_timeout_is_not_resent(self) -> None:
+        client = _FakeClient(self._timeout(), _chunks("Unexpected"))
+
+        with pytest.raises(litellm.Timeout):
+            async for _ in _model_with(client, delay_between_retries=0).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(client.requests) == 1
+
+    async def test_a_transient_failure_is_resent_once(self) -> None:
+        client = _FakeClient(self._unavailable(), _completion("Done"))
+
+        response = await _model_with(client, delay_between_retries=0).ainvoke(
+            [Message(role="user", content="hi")], Message(role="assistant")
+        )
+
+        assert response.content == "Done"
+        assert len(client.requests) == 2
+        assert client.requests[0] == client.requests[1]
+
+    async def test_a_streamed_transient_failure_is_resent_once(self) -> None:
+        client = _FakeClient(self._unavailable(), _chunks("Done"))
+
+        chunks = [
+            c
+            async for c in _model_with(client, delay_between_retries=0).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            )
+        ]
+
+        assert "".join(c.content or "" for c in chunks) == "Done"
+        assert len(client.requests) == 2
+
+    @pytest.mark.edge_case
+    async def test_a_second_transient_failure_is_raised(self) -> None:
+        client = _FakeClient(self._unavailable(), self._unavailable())
+
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await _model_with(client, delay_between_retries=0).ainvoke(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            )
+        assert len(client.requests) == 2
+
+    @pytest.mark.edge_case
+    async def test_a_rejected_request_is_not_resent(self) -> None:
+        client = _FakeClient(litellm.BadRequestError(message="bad", model="gpt-5", llm_provider="p"))
+
+        with pytest.raises(litellm.BadRequestError):
+            await _model_with(client, delay_between_retries=0).ainvoke(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            )
         assert len(client.requests) == 1

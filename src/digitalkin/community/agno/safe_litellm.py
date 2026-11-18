@@ -13,7 +13,9 @@
   rejected as too long is folded and resent once. A history window opening mid-exchange is prefixed
   with a note, giving Claude the user-first transcript it expects.
 - Recovery: an empty reply is retried once with a continuation prompt, then replaced by a notice; a
-  400 blaming the request's images is retried once without them and later requests drop images.
+  400 blaming the request's images is retried once without them and later requests drop images; a
+  transient failure (connection error, 429, 5xx) is resent once, a timeout never (litellm resends
+  nothing itself: a request the proxy cut at 120 s would take as long again).
 - Cancellation: no request starts once ``cancel_event`` is set.
 - Output: a provider refusal (``finish_reason: content_filter``) raises ``OutputCheckError`` instead
   of completing empty; ``url_citation`` annotations (http/https only) become agno citations, which
@@ -22,9 +24,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit
 
@@ -35,7 +39,7 @@ from agno.models.message import Citations, Message, UrlCitation
 from agno.models.response import ModelResponse
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.utils import trim_messages
-from openai import APIConnectionError, BadRequestError, InternalServerError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel
 
 from digitalkin.community.litellm.cost import CostTrackingLogger
@@ -45,7 +49,6 @@ from digitalkin.logger import logger
 from digitalkin.models.events import ModelInfo
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncIterator
 
     from agno.metrics import MessageMetrics
@@ -134,8 +137,9 @@ class SafeLiteLLM(LiteLLM):
         CostTrackingLogger.register()
 
         # Forwarded as top-level ``litellm.acompletion`` kwargs: ``metadata`` reaches the success
-        # callback. ``num_retries`` only retries the HTTP request to the proxy, never the run.
-        request_params: dict[str, Any] = {"drop_params": True, "num_retries": 2}
+        # callback. ``num_retries`` becomes the OpenAI client's ``max_retries``, which resends a request
+        # the proxy cut at its timeout (504) unchanged; it is 0 and ``_resend`` decides instead.
+        request_params: dict[str, Any] = {"drop_params": True, "num_retries": 0}
         if mission_id:
             request_params["metadata"] = {CostTrackingLogger.MISSION_METADATA_KEY: mission_id}
         # Anthropic only accepts the default temperature alongside thinking.
@@ -592,7 +596,7 @@ class SafeLiteLLM(LiteLLM):
     async def _ainvoke_once(
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
     ) -> ModelResponse:
-        """Send one request, retrying it once without images if the provider rejects them.
+        """Send one request, resending it once when :meth:`_resend` allows it.
 
         Args:
             messages: Agno messages to send.
@@ -603,15 +607,14 @@ class SafeLiteLLM(LiteLLM):
             The parsed response.
 
         Raises:
-            BadRequestError: When the rejection is not the images' fault, or recurs without them.
-            APIConnectionError: Likewise, for a proxy 500 surfaced as a connection error.
-            InternalServerError: Likewise, for a proxy 500.
+            APIConnectionError: When the failure is not resent (a timeout), or recurs.
+            APIStatusError: Likewise, for a rejection or a server error.
         """
         self._raise_if_cancelled()
         try:
             return await super().ainvoke(messages, assistant_message, **kwargs)
-        except (BadRequestError, APIConnectionError, InternalServerError) as exc:
-            if not self._should_retry_without_images(exc):
+        except (APIConnectionError, APIStatusError) as exc:
+            if not await self._resend(exc):
                 raise
         self._raise_if_cancelled()
         return await super().ainvoke(messages, assistant_message, **kwargs)
@@ -621,8 +624,8 @@ class SafeLiteLLM(LiteLLM):
     ) -> AsyncIterator[ModelResponse]:
         """Stream one request, resending it once if it fails before any output.
 
-        Resent without images when the provider rejects them, or unchanged when the connection to the
-        proxy drops before the first chunk (``num_retries`` only covers opening the stream).
+        Resent unchanged when the connection to the proxy drops before the first chunk, or when
+        :meth:`_resend` allows it.
 
         Args:
             messages: Agno messages to send.
@@ -633,10 +636,9 @@ class SafeLiteLLM(LiteLLM):
             Streamed responses.
 
         Raises:
-            BadRequestError: When the rejection is not the images' fault, output was already
-                streamed, or the request is rejected again without images.
-            APIConnectionError: Likewise, for a proxy 500 surfaced as a connection error.
-            InternalServerError: Likewise, for a proxy 500.
+            APIConnectionError: When the failure is not resent (a timeout), output was already
+                streamed, or the failure recurs.
+            APIStatusError: Likewise, for a rejection or a server error.
             MidStreamFallbackError: When the stream drops after output, or drops again.
         """
         self._raise_if_cancelled()
@@ -654,14 +656,47 @@ class SafeLiteLLM(LiteLLM):
                 self.id,
                 exc,
             )
-        except (BadRequestError, APIConnectionError, InternalServerError) as exc:
-            if streamed or not self._should_retry_without_images(exc):
+        except (APIConnectionError, APIStatusError) as exc:
+            if streamed or not await self._resend(exc):
                 raise
         else:
             return
         self._raise_if_cancelled()
         async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
             yield chunk
+
+    async def _resend(self, exc: APIConnectionError | APIStatusError) -> bool:
+        """Decide whether a failed request is resent once, pausing first when the failure is transient.
+
+        A timeout (the proxy's 504 at 120 s) is never resent: the same request takes as long again.
+        A rejection blaming the images is resent without them. A transient failure (connection
+        error, 429, 5xx) is resent unchanged after ``delay_between_retries``.
+
+        Args:
+            exc: The failure of the request.
+
+        Returns:
+            True when the request is to be sent once more.
+        """
+        if isinstance(exc, APITimeoutError):
+            # TODO(validate): NO-TIMEOUT-RESEND a request cut by the proxy timeout fails once, not 3 times in 6 min
+            logger.warning(
+                "[VALIDATE NO-TIMEOUT-RESEND] Request cut by the timeout, not resent (model=%s): %s", self.id, exc
+            )
+            return False
+        if self._should_retry_without_images(exc):
+            return True
+        if (
+            isinstance(exc, APIStatusError)
+            and exc.status_code != HTTPStatus.TOO_MANY_REQUESTS
+            and exc.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
+        ):
+            return False
+        logger.warning(
+            "Transient model failure, resending once in %ss (model=%s): %s", self.delay_between_retries, self.id, exc
+        )
+        await asyncio.sleep(self.delay_between_retries)
+        return True
 
     def _should_retry_without_images(self, exc: Exception) -> bool:
         """Decide whether a rejected request is worth resending without images, latching if so.
