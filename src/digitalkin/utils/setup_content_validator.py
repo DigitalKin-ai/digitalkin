@@ -10,6 +10,7 @@ undeclared key gets a correctable error *before* the write instead of breaking t
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, create_model
@@ -117,6 +118,50 @@ class SetupContentValidator:
             elif isinstance(node, list):
                 stack.extend((path, item) for item in node)
         return content
+
+    @classmethod
+    def reject_escaped_text(cls, value: Any) -> Any:
+        r"""Refuse a text whose line breaks and accents were written out as escape sequences.
+
+        A model sometimes escapes a text a second time inside its tool call: the value then holds
+        the characters ``\\n`` and ``\\u00e9`` instead of a line break and an ``é``, and is stored
+        that way with ``success:true``. Such a text is all ASCII, has no real line break, and holds
+        a ``\\uXXXX`` sequence or at least two ``\\n``; one ``\\n`` (a Windows path, a regex) is left
+        alone. Recurses through nested objects and arrays.
+
+        Args:
+            value: A text, or the content (or part of it) about to be written.
+
+        Returns:
+            The value unchanged when no text looks escaped twice.
+
+        Raises:
+            ValueError: A text looks escaped twice; the message names its path.
+        """
+        stack: list[tuple[str, Any]] = [("", value)]
+        while stack:
+            path, node = stack.pop()
+            if isinstance(node, dict):
+                stack.extend((f"{path}.{key}" if path else key, item) for key, item in node.items())
+            elif isinstance(node, list):
+                stack.extend((f"{path}[{index}]", item) for index, item in enumerate(node))
+            elif (
+                isinstance(node, str)
+                and node.isascii()
+                and "\n" not in node
+                and (re.search(r"\\u[0-9a-fA-F]{4}", node) or node.count("\\n") > 1)
+            ):
+                # TODO(validate): ESCAPED-TEXT-REFUSED a model that escaped a text twice resends it as plain text
+                logger.warning("[VALIDATE ESCAPED-TEXT-REFUSED] Escaped text refused at %r: %s", path, node[:200])
+                msg = (
+                    f"the text at {path!r} holds escape sequences written out as characters (\\n, \\u00e9) "
+                    "instead of real line breaks and accents: send the text itself, not an escaped copy of it"
+                    if path
+                    else "the text holds escape sequences written out as characters (\\n, \\u00e9) instead of "
+                    "real line breaks and accents: send the text itself, not an escaped copy of it"
+                )
+                raise ValueError(msg)
+        return value
 
     @classmethod
     def reject_oversized_output_format_spec(cls, content: dict[str, Any]) -> dict[str, Any]:

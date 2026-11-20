@@ -5,6 +5,7 @@ it. What remains is the reading half of the grammar, which ``DefaultSetup`` need
 project content the way the backend does. These tests are that contract.
 """
 
+import json
 from typing import Any
 from unittest.mock import Mock
 
@@ -635,3 +636,39 @@ class TestPlace:
     def test_a_missing_list_index_is_refused(self) -> None:
         with pytest.raises(ValueError, match="does not exist"):
             JsonStructure.place({"items": []}, "items[3].name", "x")
+
+
+class TestPage:
+    """``page`` slices a list or an object by count and by JSON size (DEV-949)."""
+
+    def test_list_page_fills_up_to_the_budget(self) -> None:
+        # Each item is 10 JSON characters: two fit in 30 with the brackets and the comma, a third does not.
+        assert JsonStructure.page(["a" * 8] * 5, 0, None, 30) == (["a" * 8] * 2, 2)
+
+    def test_list_page_stops_at_limit(self) -> None:
+        assert JsonStructure.page([1, 2, 3, 4], 1, 2, 1000) == ([2, 3], 3)
+
+    def test_dict_page_keeps_key_order(self) -> None:
+        assert JsonStructure.page({"b": 1, "a": 2}, 0, 1, 1000) == ({"b": 1}, 1)
+
+    def test_dict_page_fills_up_to_the_budget(self) -> None:
+        # Each entry is 18 JSON characters; two fit in 40 with the braces and the comma, a third does not.
+        part = {f"k{index}": "v" * 10 for index in range(4)}
+
+        page, next_offset = JsonStructure.page(part, 1, None, 40)
+
+        assert page == {"k1": "v" * 10, "k2": "v" * 10}
+        assert next_offset == 3
+
+    def test_oversized_single_item_is_returned_alone(self) -> None:
+        assert JsonStructure.page(["x" * 100, "y"], 0, None, 10) == (["x" * 100], 1)
+
+    def test_offset_past_the_end_is_an_empty_last_page(self) -> None:
+        assert JsonStructure.page([1], 5, None, 10) == ([], None)
+        assert JsonStructure.page({"a": 1}, 1, None, 10) == ({}, None)
+
+    def test_child_joins_a_key_or_an_index_in_the_path_grammar(self) -> None:
+        assert JsonStructure.child(None, "catalog") == "catalog"
+        assert JsonStructure.child("catalog", "products") == "catalog.products"
+        assert JsonStructure.child("catalog.products", 3) == "catalog.products[3]"
+        assert JsonStructure.child("limits", "max.tokens") == 'limits["max.tokens"]'

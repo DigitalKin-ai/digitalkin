@@ -6,13 +6,15 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 
+import httpx
 import litellm
+import openai
 import pytest
 from agno.exceptions import RunCancelledException
 from agno.media import Image
+from agno.metrics import MessageMetrics
 from agno.models.litellm import LiteLLM
 from agno.models.message import Message
-from agno.metrics import MessageMetrics
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
@@ -877,7 +879,9 @@ class _FakeCompactor:
         self.forced.append(messages)
         return [Message(role="user", content="REFOLDED VIEW"), *messages[-1:]] if self.refit else None
 
-    async def observe(self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True) -> None:
+    async def observe(
+        self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True
+    ) -> None:
         self.observed.append(provider_tokens)
         self.calibrated.append(calibrate)
 
@@ -1276,3 +1280,170 @@ class TestNoBlindResend:
                 [Message(role="user", content="hi")], Message(role="assistant")
             )
         assert len(client.requests) == 1
+
+
+class _SseProxy:
+    """Stands in for the LiteLLM proxy behind the real litellm and openai SSE decoding.
+
+    Each call replays one scripted SSE body under a 200, so an error frame reaches ``SafeLiteLLM``
+    exactly as litellm raises it.
+    """
+
+    def __init__(self, *bodies: bytes) -> None:
+        self.bodies = list(bodies)
+        self.requests: list[list[dict]] = []
+
+    async def acompletion(self, **kwargs: object) -> object:
+        self.requests.append(kwargs["messages"])  # type: ignore[arg-type]
+        body = self.bodies.pop(0)
+        transport = httpx.MockTransport(
+            lambda _: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+        )
+        client = openai.AsyncOpenAI(
+            api_key="test", base_url="http://proxy/v1", http_client=httpx.AsyncClient(transport=transport)
+        )
+        return await litellm.acompletion(**{
+            **kwargs,
+            "model": "litellm_proxy/gpt-5",
+            "client": client,
+            "api_key": "test",
+            "api_base": "http://proxy/v1",
+        })
+
+
+class TestErrorFrameAfterPing:
+    """Once the proxy has sent a keepalive ping, a failure arrives as an SSE error frame under a 200 (DEV-981).
+
+    litellm surfaces it as a stream dropped before its first chunk; the frame's ``code`` says
+    whether resending can help. A timeout resent unchanged costs its whole limit again.
+    """
+
+    @staticmethod
+    def _error_frame(code: str, message: str = "Error processing stream start") -> bytes:
+        error = {"message": message, "type": "invalid_request_error", "param": None, "code": code}
+        return b": ping\n\n" * 3 + f"data: {json.dumps({'error': error})}\n\ndata: [DONE]\n\n".encode()
+
+    @staticmethod
+    def _reply(text: str) -> bytes:
+        chunk = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-5",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}],
+        }
+        return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize("code", ["408", "504"])
+    async def test_a_timeout_frame_is_not_resent(self, code: str, caplog: pytest.LogCaptureFixture) -> None:
+        proxy = _SseProxy(self._error_frame(code), self._reply("Unexpected"))
+
+        with caplog.at_level(logging.WARNING), pytest.raises(MidStreamFallbackError):
+            async for _ in _model_with(proxy).ainvoke_stream(  # type: ignore[arg-type]
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(proxy.requests) == 1
+        assert f"[VALIDATE STREAM-ERROR-FRAME] Error frame {code}" in caplog.text
+
+    @pytest.mark.regression
+    async def test_a_rejection_frame_is_not_resent(self) -> None:
+        proxy = _SseProxy(self._error_frame("400", "Invalid request"), self._reply("Unexpected"))
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in _model_with(proxy).ainvoke_stream(  # type: ignore[arg-type]
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+        assert len(proxy.requests) == 1
+
+    @pytest.mark.parametrize("code", ["429", "500", "503"])
+    async def test_a_transient_frame_is_resent_once(self, code: str) -> None:
+        proxy = _SseProxy(self._error_frame(code), self._reply("Recovered"))
+
+        chunks = [
+            c
+            async for c in _model_with(proxy).ainvoke_stream(  # type: ignore[arg-type]
+                [Message(role="user", content="hi")], Message(role="assistant")
+            )
+        ]
+
+        assert "".join(c.content or "" for c in chunks) == "Recovered"
+        assert len(proxy.requests) == 2
+        assert proxy.requests[0] == proxy.requests[1]
+
+    @pytest.mark.edge_case
+    async def test_a_frame_blaming_the_images_is_resent_without_them(self) -> None:
+        proxy = _SseProxy(self._error_frame("400", "Could not process image"), self._reply("Done"))
+
+        chunks = [
+            c
+            async for c in _model_with(proxy).ainvoke_stream(_media_turn(), Message(role="assistant"))  # type: ignore[arg-type]
+        ]
+
+        assert "".join(c.content or "" for c in chunks) == "Done"
+        assert len(proxy.requests) == 2
+        assert _image_parts(proxy.requests[1]) == 0
+
+
+class TestStreamDiagnostics:
+    """A streamed call that fails, or ends slowly, logs what it had received (timeout diagnosis)."""
+
+    async def test_a_stream_cut_before_any_chunk_says_nothing_arrived(self, caplog: pytest.LogCaptureFixture) -> None:
+        timeout = litellm.Timeout(message="504 Gateway Time-out", model="gpt-5", llm_provider="litellm_proxy")
+        client = _FakeClient(timeout)
+
+        with caplog.at_level(logging.WARNING), pytest.raises(litellm.Timeout):
+            async for _ in _model_with(client, delay_between_retries=0).ainvoke_stream(
+                [Message(role="user", content="hello")], Message(role="assistant")
+            ):
+                pass
+
+        record = next(r for r in caplog.records if r.getMessage().startswith("Model stream failed"))
+        assert "1 messages, 5 characters sent" in record.getMessage()
+        assert "first chunk never" in record.getMessage()
+
+    async def test_a_stream_dropped_after_output_says_what_it_received(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = _FakeClient(TestStreamDropRetry._dropped_stream("Partial", pre_first_chunk=False))
+
+        with caplog.at_level(logging.WARNING), pytest.raises(MidStreamFallbackError):
+            async for _ in _model_with(client).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+
+        failed = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Model stream failed")]
+        assert len(failed) == 1
+        assert "1 chunks, text 7 chars" in failed[0]
+
+    async def test_a_fast_stream_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = _FakeClient(_chunks("Done"))
+
+        with caplog.at_level(logging.INFO):
+            async for _ in _model_with(client).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+
+        assert not [r for r in caplog.records if "Model stream" in r.getMessage()]
+
+    async def test_a_slow_stream_logs_its_progress(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        readings = [0.0, 61.0]
+        monkeypatch.setattr(
+            "digitalkin.community.agno.stream_progress.time.monotonic",
+            lambda: readings.pop(0) if len(readings) > 1 else readings[0],
+        )
+        client = _FakeClient(_chunks("Done"))
+
+        with caplog.at_level(logging.INFO):
+            async for _ in _model_with(client).ainvoke_stream(
+                [Message(role="user", content="hi")], Message(role="assistant")
+            ):
+                pass
+
+        slow = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Slow model stream")]
+        assert len(slow) == 1
+        assert "first chunk at 61.0s" in slow[0]

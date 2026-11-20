@@ -15,7 +15,10 @@
 - Recovery: an empty reply is retried once with a continuation prompt, then replaced by a notice; a
   400 blaming the request's images is retried once without them and later requests drop images; a
   transient failure (connection error, 429, 5xx) is resent once, a timeout never (litellm resends
-  nothing itself: a request the proxy cut at 120 s would take as long again).
+  nothing itself: a request the proxy cut at 120 s would take as long again). An SSE error frame
+  sent after a keepalive ping is classified by its ``code`` the same way.
+- Diagnosis: a streamed call that fails, or lasts a minute or more, logs what it received
+  (first chunk, longest silence, text, reasoning and tool-call argument sizes).
 - Cancellation: no request starts once ``cancel_event`` is set.
 - Output: a provider refusal (``finish_reason: content_filter``) raises ``OutputCheckError`` instead
   of completing empty; ``url_citation`` annotations (http/https only) become agno citations, which
@@ -39,9 +42,10 @@ from agno.models.message import Citations, Message, UrlCitation
 from agno.models.response import ModelResponse
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.utils import trim_messages
-from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel
 
+from digitalkin.community.agno.stream_progress import StreamProgress
 from digitalkin.community.litellm.cost import CostTrackingLogger
 from digitalkin.community.litellm.registry import LiteLLMRegistry
 from digitalkin.community.litellm.settings import get_litellm_settings
@@ -619,13 +623,18 @@ class SafeLiteLLM(LiteLLM):
         self._raise_if_cancelled()
         return await super().ainvoke(messages, assistant_message, **kwargs)
 
-    async def _ainvoke_stream_once(
+    async def _ainvoke_stream_once(  # ruff: ignore[complex-structure] - both attempts and the frame classification
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
     ) -> AsyncIterator[ModelResponse]:
         """Stream one request, resending it once if it fails before any output.
 
         Resent unchanged when the connection to the proxy drops before the first chunk, or when
-        :meth:`_resend` allows it.
+        :meth:`_resend` allows it. Once the proxy has sent a keepalive ping, a failure arrives as an SSE
+        error frame under a 200 and litellm reports it as such a drop; the frame's ``code`` then decides
+        like an HTTP status: a timeout (408, 504) or a rejection (4xx but 429) is not resent, except a
+        rejection blaming the images, resent without them. A call that fails, or ends after a minute, logs
+        what it received (:class:`StreamProgress`): the proxy cuts a call silent for 120 s, and the log
+        tells whether it was silent from the start or writing text, reasoning or tool-call arguments.
 
         Args:
             messages: Agno messages to send.
@@ -639,31 +648,70 @@ class SafeLiteLLM(LiteLLM):
             APIConnectionError: When the failure is not resent (a timeout), output was already
                 streamed, or the failure recurs.
             APIStatusError: Likewise, for a rejection or a server error.
-            MidStreamFallbackError: When the stream drops after output, or drops again.
+            MidStreamFallbackError: When the stream drops after output, drops again, or ends on a
+                timeout or rejection error frame.
         """
         self._raise_if_cancelled()
-        streamed = False
-        try:
-            async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
-                streamed = True
-                yield chunk
-        except MidStreamFallbackError as exc:
-            if streamed or not exc.is_pre_first_chunk:
-                raise
-            # TODO(validate): STREAM-DROP-RETRY a stream dropped before its first chunk is resent once
+        progress = StreamProgress()
+        try:  # ruff: ignore[too-many-statements-in-try-clause] - both attempts' failures are diagnosed
+            resend = False
+            try:
+                async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
+                    progress.see(chunk)
+                    yield chunk
+            except MidStreamFallbackError as exc:
+                if progress.chunks or not exc.is_pre_first_chunk:
+                    raise
+                frame = exc.__context__
+                while frame is not None and not isinstance(frame, APIError):
+                    frame = frame.__context__
+                status = int(frame.code) if isinstance(frame, APIError) and frame.code and frame.code.isdigit() else 0
+                if status in {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.GATEWAY_TIMEOUT} or (
+                    HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR
+                    and status != HTTPStatus.TOO_MANY_REQUESTS
+                    and not self._should_retry_without_images(exc)
+                ):
+                    # TODO(validate): STREAM-ERROR-FRAME a timeout or rejection frame after a keepalive fails once
+                    logger.warning(
+                        "[VALIDATE STREAM-ERROR-FRAME] Error frame %d after a keepalive, not resent (model=%s): %s",
+                        status,
+                        self.id,
+                        exc,
+                    )
+                    raise
+                # TODO(validate): STREAM-DROP-RETRY a stream dropped before its first chunk is resent once
+                logger.warning(
+                    "[VALIDATE STREAM-DROP-RETRY] Stream dropped before its first chunk, resending once (model=%s): %s",
+                    self.id,
+                    exc,
+                )
+                resend = True
+            except (APIConnectionError, APIStatusError) as exc:
+                if progress.chunks or not await self._resend(exc):
+                    raise
+                resend = True
+            if resend:
+                self._raise_if_cancelled()
+                async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
+                    progress.see(chunk)
+                    yield chunk
+        except Exception:
             logger.warning(
-                "[VALIDATE STREAM-DROP-RETRY] Stream dropped before its first chunk, resending once (model=%s): %s",
+                "Model stream failed (model=%s, %d messages, %d characters sent): %s",
                 self.id,
-                exc,
+                len(messages),
+                sum(len(str(message.content or "")) for message in messages),
+                progress.summary(),
             )
-        except (APIConnectionError, APIStatusError) as exc:
-            if streamed or not await self._resend(exc):
-                raise
-        else:
-            return
-        self._raise_if_cancelled()
-        async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
-            yield chunk
+            raise
+        if progress.elapsed() >= 60:  # ruff: ignore[magic-value-comparison] - a near miss of the proxy's 120 s
+            logger.info(
+                "Slow model stream (model=%s, %d messages, %d characters sent): %s",
+                self.id,
+                len(messages),
+                sum(len(str(message.content or "")) for message in messages),
+                progress.summary(),
+            )
 
     async def _resend(self, exc: APIConnectionError | APIStatusError) -> bool:
         """Decide whether a failed request is resent once, pausing first when the failure is transient.

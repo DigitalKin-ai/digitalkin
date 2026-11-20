@@ -191,20 +191,6 @@ class RegistryActionCtx(BaseActionCtx):
             raise ValueError(msg)
         return setup
 
-    async def structure_of(self, setup_id: str) -> dict[str, str]:
-        """Read a setup's stored key map from the registry search.
-
-        Like every search, it follows the index, which may briefly lag right after a write.
-
-        Args:
-            setup_id: The setup whose map to read.
-
-        Returns:
-            The map, or ``{}`` when the search summary carries none.
-        """
-        found = await self.registry.search_setups(setup_ids=[setup_id], module_types=[self.module_type], limit=1)
-        return found[0].structure if found else {}
-
 
 class RegistryAction(BaseAction[RegistryActionCtx], ABC):
     """Base for the discriminated registry actions shared across the three CRUD managers.
@@ -254,6 +240,19 @@ class RegistryAction(BaseAction[RegistryActionCtx], ABC):
             ValueError: A key (at any depth) carries a control or non-BMP character.
         """
         return SetupContentValidator.reject_unsafe_keys(value)
+
+    @field_validator("content", "value", "items", check_fields=False)
+    @classmethod
+    def _text_is_not_escaped(cls, value: Any) -> Any:
+        r"""Refuse a written text a model escaped twice (``\\n``, ``\\u00e9`` written out as characters).
+
+        Runs on any action declaring ``content`` (create, update), ``value`` (patch, append) or
+        ``items`` (append), so a corrupted text is refused with a correctable error instead of stored.
+
+        Returns:
+            The value unchanged when no text in it looks escaped twice.
+        """
+        return SetupContentValidator.reject_escaped_text(value)
 
 
 class RegistryObjectToolKit(DkToolkit):

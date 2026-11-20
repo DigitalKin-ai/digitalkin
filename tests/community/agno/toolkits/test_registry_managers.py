@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock
@@ -13,6 +14,7 @@ from agno.models.message import Message
 from agno.models.response import ModelResponse
 from pydantic import ValidationError
 
+from digitalkin.community.agno.safe_litellm import SafeLiteLLM
 from digitalkin.community.agno.toolkits import KinsManager, ServicesManager, ToolsManager
 from digitalkin.community.agno.toolkits.registry.action import (
     ChangeVisibilityAction,
@@ -31,6 +33,7 @@ from digitalkin.community.agno.toolkits.registry.services.action import (
     LoadServiceAction,
     PatchServiceAction,
     RemoveServiceAction,
+    SearchStructureServiceAction,
     ServiceSection,
     StructureServiceAction,
     UpdateServiceAction,
@@ -136,6 +139,37 @@ class TestExposedSurface:
         assert defs["AppendServiceAction"]["properties"]["items"]["anyOf"][0]["type"] == "array"
         assert {"offset", "limit"} <= set(defs["LoadServiceAction"]["properties"])
         assert "generate" in ServicesManager(*_stores()).async_functions["services_manager"].description  # type: ignore[operator]
+
+    def test_services_schema_exposes_the_size_aware_reads(self) -> None:
+        """DEV-949: get's structure flag, structure paging and search_structure reach the model."""
+        function = ServicesManager(*_stores()).async_functions["services_manager"]
+        defs = json.loads(json.dumps(function.parameters))["$defs"]
+
+        assert "SearchStructureServiceAction" in defs
+        assert {"prefix", "offset", "limit"} <= set(defs["StructureServiceAction"]["properties"])
+        assert "structure" in defs["GetServiceAction"]["properties"]
+        assert "search_structure" in function.description
+
+    def test_every_write_states_its_scope(self) -> None:
+        """The model reads, for each write, which part of the service it changes and which it keeps."""
+        defs = json.loads(json.dumps(ServicesManager(*_stores()).async_functions["services_manager"].parameters))[
+            "$defs"
+        ]
+        writes = [
+            "CreateServiceAction",
+            "UpdateServiceAction",
+            "PatchServiceAction",
+            "AppendServiceAction",
+            "RemoveServiceAction",
+            "UpdateStructureServiceAction",
+            "GenerateServiceAction",
+            "DeleteAction",
+            "ChangeVisibilityAction",
+            "SetVersionAction",
+        ]
+
+        assert [name for name in writes if "Scope:" not in defs[name]["description"]] == []
+        assert "only the structure map" in defs["UpdateStructureServiceAction"]["description"]
 
     def test_tool_schema_exposes_the_action_union_without_validate_call(self) -> None:
         # The explicit schema keeps the discriminated union for the LLM; skip_entrypoint_processing
@@ -1409,15 +1443,17 @@ class TestScopedRead:
         assert _env(raw)["output"] == {"llm.model": "which model answers"}
         assert "gpt-4o" not in raw
 
-    async def test_structure_is_empty_when_the_search_summary_carries_none(self) -> None:
-        """It reads the stored map, so an unpopulated summary yields {} — never a derived map.
+    async def test_structure_reads_the_version_not_the_search_index(self) -> None:
+        """The map comes from the current version, so a search summary that lags or carries none does not matter.
 
-        The setup itself was created WITH a map here; DefaultRegistry mirrors none, which is
-        exactly the legacy/backfill-pending case on the wire.
+        DefaultRegistry mirrors no map, which is the legacy/backfill-pending case on the wire (DEV-949).
         """
         svc, setup_id = await self._service()
 
-        assert _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))["output"] == {}
+        assert _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))["output"] == {
+            "llm.model": "which model answers",
+            "region": "where it runs",
+        }
 
     async def test_structure_refuses_another_object_type(self) -> None:
         """The type gate applies to the shape read as much as to the content read."""
@@ -1425,6 +1461,252 @@ class TestScopedRead:
 
         assert json.loads(raw)["metadata"]["success"] is False
         assert "not a service setup" in json.loads(raw)["error"]
+
+
+class TestStructurePaging:
+    """``structure`` pages a large map, narrows it to a branch, and refuses it whole over the limit (DEV-949)."""
+
+    @staticmethod
+    async def _service(structure: dict[str, str] | None) -> tuple[ServicesManager, str]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": structure})
+        return ServicesManager(setup, registry), created.id
+
+    @staticmethod
+    async def _structure(manager: ServicesManager, setup_id: str, **fields: Any) -> dict[str, Any]:
+        return _env(await manager.services_manager(StructureServiceAction(setup_id=setup_id, **fields)))
+
+    @staticmethod
+    def _big_map() -> dict[str, str]:
+        return {f"items[{index}].name": "x" * 40 for index in reversed(range(100))}
+
+    async def test_a_large_map_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service(self._big_map())
+
+        env = await self._structure(manager, setup_id)
+
+        assert env["metadata"]["success"] is False
+        assert "100 entries" in env["error"]
+        assert "offset and limit" in env["error"]
+        assert "search_structure" in env["error"]
+
+    async def test_pages_entries_sorted_by_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service({"b": "second", "a": "first", "c": "third"})
+
+        output = (await self._structure(manager, setup_id, offset=0, limit=2))["output"]
+
+        assert output == {"entries": {"a": "first", "b": "second"}, "offset": 0, "total": 3, "next_offset": 2}
+        assert list(output["entries"]) == ["a", "b"]
+
+    async def test_a_page_stays_within_the_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service(self._big_map())
+
+        output = (await self._structure(manager, setup_id, offset=0))["output"]
+
+        assert 0 < len(output["entries"]) < 100
+        assert len(json.dumps(output["entries"])) <= 1000
+        assert output["total"] == 100
+        assert output["next_offset"] == len(output["entries"])
+
+    async def test_prefix_keeps_one_branch(self) -> None:
+        manager, setup_id = await self._service({"a": "1", "a.b": "2", "a[0]": "3", "ab": "4", 'a["x.y"]': "5"})
+
+        output = (await self._structure(manager, setup_id, prefix="a"))["output"]
+
+        assert output == {"a": "1", "a.b": "2", "a[0]": "3", 'a["x.y"]': "5"}
+
+    async def test_prefix_pages_its_branch(self) -> None:
+        manager, setup_id = await self._service({"a.c": "1", "a.b": "2", "z": "3"})
+
+        output = (await self._structure(manager, setup_id, prefix="a", offset=1))["output"]
+
+        assert output == {"entries": {"a.c": "1"}, "offset": 1, "total": 2, "next_offset": None}
+
+    async def test_prefix_matching_nothing_answers_an_empty_map(self) -> None:
+        manager, setup_id = await self._service({"a": "1"})
+
+        assert (await self._structure(manager, setup_id, prefix="zz"))["output"] == {}
+
+    async def test_a_version_without_a_map_answers_an_empty_map(self) -> None:
+        manager, setup_id = await self._service(None)
+
+        assert (await self._structure(manager, setup_id))["output"] == {}
+        assert (await self._structure(manager, setup_id, offset=0))["output"] == {
+            "entries": {},
+            "offset": 0,
+            "total": 0,
+            "next_offset": None,
+        }
+
+    async def test_a_small_map_is_unchanged(self) -> None:
+        manager, setup_id = await self._service({"b": "2", "a": "1"})
+
+        assert list((await self._structure(manager, setup_id))["output"].items()) == [("b", "2"), ("a", "1")]
+
+
+class TestSearchStructure:
+    """``search_structure`` finds map entries by the words of their path or description, paged (DEV-949)."""
+
+    _MAP: ClassVar[dict[str, str]] = {
+        "catalog.products[0].sku": "P001 drill",
+        "catalog.products[1].sku": "P002 hammer",
+        "catalog.title": "Shop name",
+        "pricing.currency": "Currency of every price, EUR",
+    }
+
+    @staticmethod
+    async def _search(query: str, **fields: Any) -> dict[str, Any]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": TestSearchStructure._MAP})
+        manager = ServicesManager(setup, registry)
+        return _env(
+            await manager.services_manager(SearchStructureServiceAction(setup_id=created.id, query=query, **fields))
+        )
+
+    async def test_finds_an_entry_by_a_word_of_its_path(self) -> None:
+        output = (await self._search("currency"))["output"]
+
+        assert output == {
+            "entries": {"pricing.currency": "Currency of every price, EUR"},
+            "offset": 0,
+            "total": 1,
+            "next_offset": None,
+        }
+
+    async def test_finds_an_entry_by_a_word_of_its_description(self) -> None:
+        assert (await self._search("hammer"))["output"]["entries"] == {"catalog.products[1].sku": "P002 hammer"}
+
+    async def test_every_word_must_match(self) -> None:
+        assert list((await self._search("catalog sku P001"))["output"]["entries"]) == ["catalog.products[0].sku"]
+
+    async def test_is_case_insensitive(self) -> None:
+        assert list((await self._search("SHOP"))["output"]["entries"]) == ["catalog.title"]
+
+    async def test_results_are_paged_and_sorted_by_path(self) -> None:
+        output = (await self._search("catalog", offset=1, limit=1))["output"]
+
+        assert output == {
+            "entries": {"catalog.products[1].sku": "P002 hammer"},
+            "offset": 1,
+            "total": 3,
+            "next_offset": 2,
+        }
+
+    async def test_no_match_is_an_empty_page(self) -> None:
+        assert (await self._search("nothing-like-this"))["output"] == {
+            "entries": {},
+            "offset": 0,
+            "total": 0,
+            "next_offset": None,
+        }
+
+    async def test_a_query_without_a_word_is_refused(self) -> None:
+        """A blank query would match every entry; the model sends JSON, so it is refused as an invalid action."""
+        raw = await ServicesManager(*_stores()).services_manager(
+            action={"action": "search_structure", "setup_id": "setups:x", "query": "   "}  # type: ignore[arg-type]
+        )
+
+        assert json.loads(raw)["metadata"]["success"] is False
+        assert "query" in json.loads(raw)["error"]
+
+    async def test_refuses_a_tool_setup(self) -> None:
+        raw = await ServicesManager(*_stores()).services_manager(
+            SearchStructureServiceAction(setup_id="setups:duda", query="x")
+        )
+
+        assert json.loads(raw)["metadata"]["success"] is False
+        assert "not a service setup" in json.loads(raw)["error"]
+
+
+class TestGetStructure:
+    """``get`` returns a small map, refuses a large one, and drops it on ``structure=false`` (DEV-949)."""
+
+    @staticmethod
+    async def _get(stored: dict[str, str] | None, **fields: Any) -> dict[str, Any]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": stored})
+        manager = ServicesManager(setup, registry)
+        return _env(await manager.services_manager(GetServiceAction(setup_id=created.id, **fields)))
+
+    @staticmethod
+    def _big_map() -> dict[str, str]:
+        return {f"items[{index}].name": "x" * 40 for index in range(100)}
+
+    async def test_a_small_map_is_returned_as_before(self) -> None:
+        version = (await self._get({"a": "what a is"}))["output"]["current_setup_version"]
+
+        assert version["structure"] == {"a": "what a is"}
+        assert "structure_entries" not in version
+
+    async def test_a_large_map_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        env = await self._get(self._big_map())
+
+        assert env["metadata"]["success"] is False
+        assert "100 entries" in env["error"]
+        assert "structure=false" in env["error"]
+
+    async def test_structure_false_drops_the_map_and_counts_it(self) -> None:
+        version = (await self._get({"a": "what a is"}, structure=False))["output"]["current_setup_version"]
+
+        assert "structure" not in version
+        assert "content" not in version
+        assert version["structure_entries"] == 1
+
+    async def test_structure_false_on_a_large_map_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        env = await self._get(self._big_map(), structure=False)
+
+        assert env["output"]["current_setup_version"]["structure_entries"] == 100
+        assert "x" * 40 not in json.dumps(env)
+
+    async def test_a_version_without_a_map_counts_zero(self) -> None:
+        version = (await self._get(None, structure=False))["output"]["current_setup_version"]
+
+        assert version["structure_entries"] == 0
+
+
+class TestSearchRowStructure:
+    """A ``search`` row shows a small map, and a text in place of a map too large to show (DEV-949)."""
+
+    @staticmethod
+    async def _rows(structure: dict[str, str]) -> list[dict[str, Any]]:
+        setup, registry = _stores()
+
+        class _WithMap(DefaultRegistry):
+            async def search_setups(self, *args: Any, **kwargs: Any) -> list[SetupSummary]:
+                return [
+                    SetupSummary(
+                        setup_id="setups:big",
+                        name="Big",
+                        module_type=RegistryModuleType.SERVICE,
+                        setup_version="1.0.0",
+                        structure=structure,
+                    )
+                ]
+
+        indexed = _WithMap("", "", "")
+        indexed._modules = registry._modules
+        env = _env(await ServicesManager(setup, indexed).services_manager(SearchAction(query="big")))
+        return env["output"]["setups"]
+
+    async def test_a_small_map_is_shown(self) -> None:
+        assert (await self._rows({"a": "what a is"}))[0]["structure"] == {"a": "what a is"}
+
+    async def test_a_large_map_is_replaced_by_a_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        row = (await self._rows({f"items[{index}].name": "x" * 40 for index in range(100)}))[0]
+
+        assert isinstance(row["structure"], str)
+        assert "100 entries" in row["structure"]
+        assert "structure action" in row["structure"]
+        assert "x" * 40 not in json.dumps(row)
 
 
 class TestSearchRowsCarryTheStructure:
@@ -1494,8 +1776,8 @@ class TestStructureFieldValidation:
         with pytest.raises(ValidationError):
             LoadServiceAction(setup_id="s", key=["llm.model"])  # type: ignore[arg-type]
 
-    def test_structure_action_takes_only_a_setup_id(self) -> None:
-        assert set(StructureServiceAction.model_fields) - {"action"} == {"setup_id"}
+    def test_structure_action_takes_a_setup_id_and_paging(self) -> None:
+        assert set(StructureServiceAction.model_fields) - {"action"} == {"setup_id", "prefix", "offset", "limit"}
 
     def test_structure_is_a_read_not_a_write(self) -> None:
         """``writes`` drives cache invalidation; a shape read must not trigger it."""
@@ -2421,7 +2703,7 @@ class TestBatchAndTextAppend:
 
 
 class TestPagedLoad:
-    """``load`` reads a large list or text page by page, and never returns a huge part whole (DEV-938)."""
+    """``load`` reads a large list, text or object page by page, and refuses a huge part unpaged (DEV-938, DEV-949)."""
 
     @staticmethod
     async def _service(content: dict[str, Any]) -> tuple[ServicesManager, str]:
@@ -2458,53 +2740,98 @@ class TestPagedLoad:
         text = "".join(str(index % 10) for index in range(100))
         manager, setup_id = await self._service({"notes": text})
 
-        env = await self._load(manager, setup_id, key="notes", offset=90, limit=20)
+        output = (await self._load(manager, setup_id, key="notes", offset=90, limit=20))["output"]
 
-        assert env["output"] == {"page": text[90:], "offset": 90, "total": 100, "next_offset": None}
+        # The page opens on the last characters before the offset asked (a fifth of this tiny page).
+        assert (output["page"], output["offset"], output["total"], output["next_offset"]) == (text[85:], 85, 100, None)
+        assert output["part"].startswith("characters 85-100 of 100; its first 5 characters repeat")
 
-    @pytest.mark.parametrize("key", ["title", "catalog", None])
-    async def test_paging_anything_but_a_list_or_text_is_refused(self, key: str | None) -> None:
-        manager, setup_id = await self._service({"title": 3, "catalog": {"a": 1}})
+    async def test_a_scalar_cannot_be_paged(self) -> None:
+        manager, setup_id = await self._service({"title": 3})
 
-        env = await self._load(manager, setup_id, key=key, offset=0, limit=5)
+        env = await self._load(manager, setup_id, key="title", offset=0, limit=5)
 
         assert env["metadata"]["success"] is False
-        assert "list or a text" in env["error"]
+        assert "a list, a text or an object" in env["error"]
 
-    async def test_a_large_list_without_paging_answers_its_first_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
-        item = "x" * 98
-        manager, setup_id = await self._service({"products": [item] * 30})
+    async def test_an_object_pages_by_its_keys(self) -> None:
+        manager, setup_id = await self._service({"catalog": {"b": 1, "a": 2, "c": 3}})
 
-        output = (await self._load(manager, setup_id, key="products"))["output"]
+        env = await self._load(manager, setup_id, key="catalog", offset=1, limit=1)
 
-        assert output["offset"] == 0
-        assert output["total"] == 30
-        assert 0 < len(output["page"]) < 30
+        assert env["output"] == {"page": {"a": 2}, "offset": 1, "total": 3, "next_offset": 2}
+
+    async def test_the_whole_configuration_pages_by_its_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({f"sku{index:04d}": "w" * 50 for index in range(200)})
+
+        output = (await self._load(manager, setup_id, offset=0))["output"]
+
+        assert 0 < len(output["page"]) < 200
         assert len(json.dumps(output["page"])) <= 1000
+        assert next(iter(output["page"])) == "sku0000"
+        assert output["total"] == 200
         assert output["next_offset"] == len(output["page"])
 
-    async def test_a_large_text_answers_its_first_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
+    async def test_a_large_list_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": ["x" * 98] * 30})
+
+        env = await self._load(manager, setup_id, key="products")
+
+        assert env["metadata"]["success"] is False
+        assert "products is a list of 30 items" in env["error"]
+        assert "offset and limit" in env["error"]
+        assert "x" * 98 not in json.dumps(env)
+
+    async def test_a_large_text_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
         manager, setup_id = await self._service({"notes": "y" * 5000})
 
-        output = (await self._load(manager, setup_id, key="notes"))["output"]
+        env = await self._load(manager, setup_id, key="notes")
 
-        assert output == {"page": "y" * 1000, "offset": 0, "total": 5000, "next_offset": 1000}
+        assert env["metadata"]["success"] is False
+        assert "notes is a text of 5000 characters" in env["error"]
 
-    async def test_a_large_object_answers_an_outline(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
+    async def test_a_large_configuration_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
         manager, setup_id = await self._service({"products": ["z" * 100] * 20, "title": "Shop", "meta": {"a": 1}})
 
-        output = (await self._load(manager, setup_id))["output"]
+        env = await self._load(manager, setup_id)
 
-        assert output["outline"] == {
-            "products": {"type": "list", "chars": len(json.dumps(["z" * 100] * 20)), "items": 20},
-            "title": {"type": "str", "chars": len(json.dumps("Shop")), "items": None},
-            "meta": {"type": "dict", "chars": len(json.dumps({"a": 1})), "items": 1},
-        }
-        assert "offset" in output["hint"]
-        assert "z" * 100 not in json.dumps(output)
+        assert env["metadata"]["success"] is False
+        assert "The configuration is an object of 3 keys" in env["error"]
+        assert "narrower key" in env["error"]
+
+    async def test_a_large_nested_object_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"shop": {"products": ["z" * 100] * 20, "title": "Shop"}})
+
+        env = await self._load(manager, setup_id, key="shop")
+
+        assert env["metadata"]["success"] is False
+        assert "shop is an object of 2 keys" in env["error"]
+
+    async def test_a_page_of_one_oversized_value_names_its_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Paging an object never hands back one value larger than a page: it names the key to load (review #1)."""
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"catalog": {"products": ["x" * 98] * 30}, "meta": 1})
+
+        env = await self._load(manager, setup_id, offset=0)
+
+        assert env["metadata"]["success"] is False
+        assert "load key catalog" in env["error"]
+        assert "offset 1" in env["error"]
+        assert "x" * 98 not in json.dumps(env)
+
+    async def test_a_page_of_one_oversized_item_names_its_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": [{"a": "x" * 2000}, 1]})
+
+        env = await self._load(manager, setup_id, key="products", offset=0)
+
+        assert env["metadata"]["success"] is False
+        assert "load key products[0]" in env["error"]
 
     async def test_a_nested_list_is_paged(self) -> None:
         """The setup service answers a keyed read as ``{key: part}``, whatever the key's depth."""
@@ -2514,23 +2841,16 @@ class TestPagedLoad:
 
         assert env["output"] == {"page": [10, 11, 12, 13, 14], "offset": 10, "total": 50, "next_offset": 15}
 
-    async def test_a_bracket_quoted_text_is_paged(self) -> None:
+    async def test_a_bracket_quoted_text_is_paged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_TEXT_OVERLAP_CHARS", "0")
         manager, setup_id = await self._service({"limits": {"max.tokens": "abcdef"}})
 
-        env = await self._load(manager, setup_id, key='limits["max.tokens"]', offset=2, limit=2)
+        output = (await self._load(manager, setup_id, key='limits["max.tokens"]', offset=2))["output"]
 
-        assert env["output"] == {"page": "cd", "offset": 2, "total": 6, "next_offset": 4}
-
-    async def test_a_large_nested_object_answers_an_outline(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
-        manager, setup_id = await self._service({"shop": {"products": ["z" * 100] * 20, "title": "Shop"}})
-
-        output = (await self._load(manager, setup_id, key="shop"))["output"]
-
-        assert set(output["outline"]) == {"products", "title"}
+        assert (output["page"], output["offset"], output["total"], output["next_offset"]) == ("cdef", 2, 6, None)
 
     async def test_a_limit_never_exceeds_one_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
         manager, setup_id = await self._service({"products": ["x" * 98] * 30, "notes": "y" * 5000})
 
         listed = (await self._load(manager, setup_id, key="products", offset=0, limit=30))["output"]
@@ -2538,17 +2858,7 @@ class TestPagedLoad:
 
         assert len(json.dumps(listed["page"])) <= 1000
         assert listed["next_offset"] == len(listed["page"])
-        assert text["page"] == "y" * 1000
-        assert text["next_offset"] == 1000
-
-    async def test_an_outline_of_many_keys_is_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_LOAD_PAGE_CHARS", "1000")
-        manager, setup_id = await self._service({f"sku{index:04d}": "w" * 50 for index in range(200)})
-
-        output = (await self._load(manager, setup_id))["output"]
-
-        assert len(json.dumps(output["outline"])) <= 1000
-        assert output["more_keys"] == 200 - len(output["outline"])
+        assert 0 < len(json.dumps(text["page"])) <= 1000
 
     async def test_a_small_load_is_unchanged(self) -> None:
         manager, setup_id = await self._service({"products": [1, 2], "title": "Shop"})
@@ -2576,11 +2886,105 @@ class TestPagedLoad:
         assert kin["output"]["current_setup_version"]["content"] == {"agent": "x"}
 
 
-class _Writer:
-    """A stand-in writer model: replies per section, keyed by its instructions (``write <key>``).
+class TestTextPages:
+    """A long text is paged at natural boundaries; each page opens on the end of the previous one (DEV-949)."""
 
-    A reply is a text, or an exception to raise. It records every request, the peak number of calls in
-    flight, and how many calls were cancelled.
+    _TEXT: ClassVar[str] = "".join(f"Sentence number {index} talks about the catalog. " for index in range(400))
+
+    @staticmethod
+    async def _read(monkeypatch: pytest.MonkeyPatch, text: str, offset: int, overlap: str = "100") -> dict[str, Any]:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_TEXT_OVERLAP_CHARS", overlap)
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"notes": text}, "structure": {}})
+        manager = ServicesManager(setup, registry)
+        env = await manager.services_manager(LoadServiceAction(setup_id=created.id, key="notes", offset=offset))
+        return _env(env)["output"]
+
+    async def _page(self, monkeypatch: pytest.MonkeyPatch, offset: int, overlap: str = "100") -> dict[str, Any]:
+        return await self._read(monkeypatch, self._TEXT, offset, overlap)
+
+    async def test_a_page_ends_on_a_sentence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        page = (await self._page(monkeypatch, 0))["page"]
+
+        assert page.rstrip().endswith("catalog.")
+        assert len(json.dumps(page)) <= 1000
+
+    async def test_the_next_page_opens_on_the_end_of_this_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0)
+        second = await self._page(monkeypatch, first["next_offset"])
+        repeated = first["next_offset"] - second["offset"]
+
+        assert first["next_offset"] == len(first["page"])
+        assert 0 < repeated <= 100
+        assert first["page"].endswith(second["page"][:repeated])
+        assert f"its first {repeated} characters repeat the end of the previous page" in second["part"]
+        assert len(json.dumps(second["page"])) <= 1000
+
+    async def test_part_says_which_characters_and_what_follows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = await self._page(monkeypatch, 0)
+
+        assert output["part"].startswith(f"characters 0-{len(output['page'])} of {len(self._TEXT)}")
+        assert f"next page starts at {output['next_offset']}" in output["part"]
+
+    async def test_following_next_offset_reads_the_whole_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        read, offset = "", 0
+        while offset is not None:
+            output = await self._page(monkeypatch, offset)
+            read = read[: output["offset"]] + output["page"]
+            offset = output["next_offset"]
+
+        assert read == self._TEXT
+        assert "last page" in output["part"]
+
+    async def test_without_overlap_a_page_starts_where_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0, overlap="0")
+        second = await self._page(monkeypatch, first["next_offset"], overlap="0")
+
+        assert second["offset"] == first["next_offset"]
+
+    async def test_an_offset_past_the_end_is_an_empty_last_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = await self._page(monkeypatch, len(self._TEXT) + 5)
+
+        assert (output["page"], output["next_offset"]) == ("", None)
+
+    async def test_pages_overlap_even_at_a_long_paragraph_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The splitter alone repeats only the blank line when a paragraph is longer than the overlap (Litmus D3)."""
+        paragraph = "This fairly long sentence describes one precise maintenance step of the box. " * 4
+        text = "\n\n".join([paragraph] * 6)
+        first = await self._read(monkeypatch, text, 0)
+        second = await self._read(monkeypatch, text, first["next_offset"])
+
+        assert 20 < first["next_offset"] - second["offset"] <= 100
+
+    async def test_pages_never_shrink_before_a_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A page ending on a paragraph followed by one too long to fit must not make the next pages shrink."""
+        text = "A short closing paragraph of a few words.\n\n" + " ".join(["longword"] * 600)
+        offset, pages = 0, 0
+        while offset is not None:
+            output = await self._read(monkeypatch, text, offset)
+            assert output["next_offset"] is None or output["next_offset"] > offset
+            offset, pages = output["next_offset"], pages + 1
+
+        assert pages <= 8
+
+    async def test_the_page_estimate_matches_the_pages_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0)
+        pages, offset = 0, first["next_offset"]
+        while offset is not None:
+            offset = (await self._page(monkeypatch, offset))["next_offset"]
+            pages += 1
+        estimate = int(first["part"].split("about ")[1].split(" more")[0])
+
+        assert abs(estimate - pages) <= 1
+
+
+class _Writer:
+    """A stand-in writer model: streams one reply per section, keyed by its instructions (``write <key>``).
+
+    A reply is a text, streamed in two pieces, or an exception to raise. It records every request, the
+    peak number of calls in flight, and how many calls were cancelled. It only streams: a writer called
+    without streaming fails.
     """
 
     def __init__(self, replies: dict[str, list[Any]], delay: float = 0.0) -> None:
@@ -2591,7 +2995,8 @@ class _Writer:
         self.peak = 0
         self.cancelled = 0
 
-    async def aresponse(self, messages: list[Message]) -> ModelResponse:
+    async def ainvoke_stream(self, messages: list[Message], assistant_message: Message) -> AsyncIterator[ModelResponse]:
+        assert assistant_message.role == "assistant"
         self.requests.append(messages)
         key = str(messages[1].content).rsplit("\n", 1)[-1].removeprefix("write ")
         self.in_flight += 1
@@ -2606,7 +3011,10 @@ class _Writer:
         reply = self.replies[key].pop(0)
         if isinstance(reply, BaseException):
             raise reply
-        return ModelResponse(content=reply)
+        half = len(reply) // 2
+        yield ModelResponse(content=reply[:half])
+        yield ModelResponse(reasoning_content="not part of the section")
+        yield ModelResponse(content=reply[half:])
 
 
 class TestGenerate:
@@ -2819,7 +3227,7 @@ class TestGenerate:
         assert _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"] == 1
 
     async def test_concurrency_is_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DK_SERVICE_WRITER_CONCURRENCY", "2")
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_WRITER_CONCURRENCY", "2")
         writer = _Writer({f"part{index}": ["1"] for index in range(6)}, delay=0.01)
         manager, _, setup_id = await self._service(writer, {"numbers": []})
 
@@ -2929,6 +3337,246 @@ class TestGenerate:
         assert "`intro`" in prompt
         assert "write intro" in prompt
         assert "JSON" in str(writer.requests[0][0].content)
+
+
+class TestWriterModel:
+    """The generate writer is a copy of the agent's model: same request settings, no history compactor.
+
+    Its reasoning is the agent's, untouched: the writer serves any kin's model, reasoning or not.
+    """
+
+    def test_the_writer_keeps_the_agent_request_settings(self) -> None:
+        model = SafeLiteLLM(id="claude-sonnet-5", request_params={"num_retries": 0}, compactor=Mock())
+        manager = ServicesManager(Mock(), Mock())
+
+        manager.bind_writer(model)
+
+        writer = manager._ctx_data.writer
+        assert isinstance(writer, SafeLiteLLM)
+        assert writer is not model
+        assert writer.compactor is None
+        assert writer.request_params == {"num_retries": 0}
+
+
+class TestEscapedTextIsRefused:
+    r"""A text a model escaped twice (``\\n``, ``\\u00e9`` written out) is refused before any write."""
+
+    @staticmethod
+    async def _call(manager: ServicesManager, action: dict[str, Any]) -> dict[str, Any]:
+        return _env(await manager.services_manager(action=action))  # type: ignore[arg-type]
+
+    @staticmethod
+    async def _service() -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="N", content={"note": "x", "items": []}, structure={})
+            )
+        )
+        return manager, created["output"]["setup_id"]
+
+    async def test_append_refuses_an_escaped_text(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {
+                "action": "append",
+                "setup_id": setup_id,
+                "path": "note",
+                "value": "\\n\\nChapitre 2 : c\\u00e2blage",
+                "structure": {},
+            },
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_append_refuses_an_escaped_item(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "append", "setup_id": setup_id, "path": "items", "items": ["ok", "caf\\u00e9"], "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_patch_refuses_an_escaped_text(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "patch", "setup_id": setup_id, "path": "note", "value": "a\\nb\\nc", "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_create_refuses_escaped_content(self) -> None:
+        env = await self._call(
+            ServicesManager(*_stores()),
+            {"action": "create", "name": "N", "content": {"notice": "c\\u00e2blage"}, "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "'notice'" in env["error"]
+
+    async def test_a_real_text_is_appended(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "append", "setup_id": setup_id, "path": "note", "value": "\nDeuxième ligne", "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is True
+
+    async def test_a_generated_escaped_section_fails(self) -> None:
+        writer = _Writer({"intro": ['"Chapitre 1 \\\\u00e9t\\\\u00e9"'], "title": ['"Clean title"']})
+        manager, setup, setup_id = await TestGenerate._service(writer)
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[TestGenerate._section("intro", "intro"), TestGenerate._section("title", "title")],
+                )
+            )
+        )["output"]
+
+        assert [item["path"] for item in output["failed"]] == ["intro"]
+        assert "escape sequences" in output["failed"][0]["reason"]
+        assert setup.setups[setup_id].current_setup_version.content["title"] == "Clean title"
+
+    def test_value_is_typed_in_the_schema(self) -> None:
+        """An untyped ``value`` left the model free to send an escaped copy of a text."""
+        value = AppendServiceAction.model_json_schema()["properties"]["value"]
+
+        assert {"string", "number", "boolean", "array", "object", "null"} <= {
+            branch.get("type") for branch in value["anyOf"]
+        }
+
+
+class TestUpdateStructure:
+    """``update_structure`` merges map entries into a new version, leaving the content untouched."""
+
+    @staticmethod
+    async def _service() -> tuple[ServicesManager, DefaultSetup, str]:
+        setup, registry = _stores()
+        created = await setup.create_setup({
+            "name": "Shop",
+            "content": {"products": [{"id": "P1"}, {"id": "P2"}], "limits": {"max.tokens": 3}},
+            "structure": {"products": "Products P441 to P450", "products[1]": "old P2"},
+            "documentation": "doc",
+        })
+        return ServicesManager(setup, registry), setup, created.id
+
+    @staticmethod
+    async def _update(manager: ServicesManager, setup_id: str, entries: dict[str, str]) -> dict[str, Any]:
+        return _env(
+            await manager.services_manager(
+                action={"action": "update_structure", "setup_id": setup_id, "entries": entries}
+            )  # type: ignore[arg-type]
+        )
+
+    async def test_entries_are_merged_and_the_content_kept(self) -> None:
+        manager, setup, setup_id = await self._service()
+        before = setup.setups[setup_id].current_setup_version
+
+        env = await self._update(manager, setup_id, {"products[0]": "P1 drill", "products": "All 2 products"})
+
+        after = setup.setups[setup_id].current_setup_version
+        assert env["metadata"]["success"] is True
+        assert after.id != before.id
+        assert after.content == before.content
+        assert after.documentation == "doc"
+        assert after.structure == {"products": "All 2 products", "products[0]": "P1 drill", "products[1]": "old P2"}
+
+    async def test_batches_add_up(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[0]": "P1"})
+        await self._update(manager, setup_id, {"products[1]": "P2"})
+
+        structure = setup.setups[setup_id].current_setup_version.structure
+        assert (structure["products[0]"], structure["products[1]"]) == ("P1", "P2")
+
+    async def test_an_empty_description_removes_the_entry(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[1]": "", "products[9]": ""})
+
+        assert "products[1]" not in setup.setups[setup_id].current_setup_version.structure
+
+    async def test_an_unknown_path_is_refused_and_nothing_written(self) -> None:
+        manager, setup, setup_id = await self._service()
+        before = setup.setups[setup_id].current_setup_version.id
+
+        env = await self._update(manager, setup_id, {"products[0]": "ok", "products[7]": "no such item"})
+
+        assert env["metadata"]["success"] is False
+        assert "products[7]" in env["error"]
+        assert setup.setups[setup_id].current_setup_version.id == before
+
+    async def test_a_bracket_quoted_key_is_accepted(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        env = await self._update(manager, setup_id, {'limits["max.tokens"]': "token cap"})
+
+        assert env["metadata"]["success"] is True
+        assert setup.setups[setup_id].current_setup_version.structure['limits["max.tokens"]'] == "token cap"
+
+    async def test_a_long_description_is_clipped(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[0]": "x" * 5000})
+
+        assert len(setup.setups[setup_id].current_setup_version.structure["products[0]"]) < 5000
+
+    async def test_the_receipt_carries_no_map(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        output = (await self._update(manager, setup_id, {"products[0]": "P1"}))["output"]
+
+        assert "structure" not in output
+        assert output["setup_id"] == setup_id
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = await self._update(ServicesManager(*_stores()), "setups:duda", {"secret": "x"})
+
+        assert env["metadata"]["success"] is False
+        assert "not a service setup" in env["error"]
+
+    async def test_entries_are_required(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        assert (await self._update(manager, setup_id, {}))["metadata"]["success"] is False
+
+    def test_update_structure_reaches_the_model(self) -> None:
+        function = ServicesManager(*_stores()).async_functions["services_manager"]
+
+        assert "UpdateStructureServiceAction" in json.loads(json.dumps(function.parameters))["$defs"]
+        assert "'update_structure'" in function.description
+
+    async def test_a_patch_refusal_points_at_update_structure(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                action={  # type: ignore[arg-type]
+                    "action": "patch",
+                    "setup_id": setup_id,
+                    "path": "limits",
+                    "value": {"max.tokens": 3},
+                    "structure": {"products[0]": "P1"},
+                }
+            )
+        )
+
+        assert "use update_structure" in env["error"]
 
 
 class TestDisplayLabels:

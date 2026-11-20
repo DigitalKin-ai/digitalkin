@@ -20,6 +20,7 @@ A resolver that splits naively on ``.`` gets the second rule wrong silently, ret
 wrong key or nothing. That is the one real interop risk in the design.
 """
 
+import json
 from typing import Any, ClassVar
 
 from digitalkin.logger import logger
@@ -186,6 +187,54 @@ class JsonStructure:
             return True
         cls.append(content, path, value)
         return False
+
+    @classmethod
+    def page(
+        cls, value: list[Any] | dict[str, Any], offset: int, limit: int | None, budget: int
+    ) -> tuple[list[Any] | dict[str, Any], int | None]:
+        """Cut one page out of a list or an object (in its key order).
+
+        A page holds items from ``offset`` while there are fewer than ``limit`` and its JSON stays
+        within ``budget`` characters; it always holds one item when one remains, so paging progresses
+        even past an item larger than the budget.
+
+        Args:
+            value: The list or object to page.
+            offset: The first item of the page.
+            limit: The most items the page may hold; ``None`` for as many as fit.
+            budget: The most JSON characters a page may take.
+
+        Returns:
+            The page, of the same type as ``value``, and the offset of the next page, ``None`` after the last.
+        """
+        items = list(value.items()) if isinstance(value, dict) else value
+        last = len(items) if limit is None else min(len(items), offset + limit)
+        end, used = offset, 2
+        for item in items[offset:last]:
+            size = (
+                len(json.dumps(item[0], ensure_ascii=False)) + 2 + len(json.dumps(item[1], ensure_ascii=False))
+                if isinstance(value, dict)
+                else len(json.dumps(item, ensure_ascii=False))
+            )
+            used += size + 2 * (end > offset)
+            if used > budget and end > offset:
+                break
+            end += 1
+        page = dict(items[offset:end]) if isinstance(value, dict) else items[offset:end]
+        return page, end if end < len(items) else None
+
+    @classmethod
+    def child(cls, path: str | None, segment: str | int) -> str:
+        """Name the element ``segment`` under ``path`` in the path grammar.
+
+        Args:
+            path: The parent's key path; ``None`` for the document root.
+            segment: An object key or a list index.
+
+        Returns:
+            The child's key path, its key bracket-quoted when the grammar requires it.
+        """
+        return cls._encode([*cls._decode(path), segment] if path else [segment])
 
     @classmethod
     def forget(cls, structure: dict[str, str], path: str) -> dict[str, str]:

@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import os
+import re
 import time
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
 from agno.exceptions import RunCancelledException
 from agno.models.message import Message
 from pydantic import BaseModel, Field, model_validator
+from semantic_text_splitter import TextSplitter
 
 from digitalkin.community.agno.toolkits.registry.action import (
     ChangeVisibilityAction,
@@ -45,6 +46,7 @@ from digitalkin.community.agno.toolkits.registry.action import (
 )
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
 from digitalkin.logger import logger
+from digitalkin.models.settings.services_manager import get_services_manager_settings
 from digitalkin.utils.json_structure import JsonStructure
 from digitalkin.utils.setup_content_validator import SetupContentValidator
 
@@ -98,20 +100,43 @@ class ServiceReceipt(BaseModel):
 class GetServiceAction(GetAction):
     """Fetch one service by id, with its current version, status and visibility, without its configuration."""
 
+    structure: bool = Field(
+        default=True,
+        description="Include the structure map (true by default). A map too large to return is refused: then "
+        "call get with structure=false, and read the map with the structure action, paged, or search_structure.",
+    )
+
     async def execute(self, ctx: RegistryActionCtx) -> Any:
-        """Read the service and replace its configuration by its size.
+        """Read the service and replace its configuration by its size, and its map by its count on request.
 
         A large service's configuration would fill the model's context; ``load`` reads it, by key or by page.
 
         Returns:
             The setup as ``get`` answers it, its ``current_setup_version`` carrying ``content_chars``
-            instead of ``content``.
+            instead of ``content``, and ``structure_entries`` instead of ``structure`` when ``structure``
+            is false.
+
+        Raises:
+            ValueError: ``structure`` is true and the map is larger than ``structure_max_chars``.
         """
         setup = await ctx.ensure_kind(self.setup_id)
-        data = setup.model_dump(mode="json", exclude={"current_setup_version": {"content"}})
-        data["current_setup_version"]["content_chars"] = len(
-            json.dumps(setup.current_setup_version.content, ensure_ascii=False)
-        )
+        version = setup.current_setup_version
+        stored = version.structure or {}
+        if self.structure:
+            chars = len(json.dumps(stored, ensure_ascii=False))
+            budget = get_services_manager_settings().structure_max_chars
+            if chars > budget:
+                msg = (
+                    f"The structure has {len(stored)} entries, {chars} characters, too large to return with get "
+                    f"(limit {budget}): call get with structure=false, then the structure action with offset and "
+                    "limit (or search_structure)."
+                )
+                raise ValueError(msg)
+            data = setup.model_dump(mode="json", exclude={"current_setup_version": {"content"}})
+        else:
+            data = setup.model_dump(mode="json", exclude={"current_setup_version": {"content", "structure"}})
+            data["current_setup_version"]["structure_entries"] = len(stored)
+        data["current_setup_version"]["content_chars"] = len(json.dumps(version.content, ensure_ascii=False))
         return data
 
 
@@ -124,6 +149,9 @@ class CreateServiceAction(RegistryAction):
     The service is always created *private* (owner only): visibility is not a creation
     parameter. Widening it to ``internal`` (whole organisation) or ``public`` (everyone)
     requires a separate ``change_visibility`` call.
+
+    Scope: creates a new service: its name, its documentation, its whole configuration and its structure map, as
+    its first version.
     """
 
     display_name = "Create"
@@ -172,26 +200,101 @@ class StructureServiceAction(RegistryAction):
 
     Use it on a setup id you already hold; ``search`` already returns the same map on
     every row, so there is no need to call this straight after a search. Feed a key from
-    it to ``load`` to read just that part of the configuration.
+    it to ``load`` to read just that part of the configuration. A large map is read page by
+    page, or one branch at a time with ``prefix``.
     """
 
     display_name = "Structure"
     action: Literal["structure"] = "structure"
     setup_id: str = Field(..., description="The service setup id whose shape to show.")
+    prefix: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Show only one branch: the entry at this key path and every entry under it "
+        "(e.g. 'catalog' keeps 'catalog', 'catalog.products', 'catalog[0]', not 'catalogs').",
+    )
+    offset: int | None = Field(
+        default=None,
+        ge=0,
+        description="Page the map: the first entry to return, entries sorted by key path. The answer gives "
+        "the total and the next offset. A map too large to return whole is refused unless you page it.",
+    )
+    limit: int | None = Field(
+        default=None, ge=1, description="How many entries the page holds. Omit it for as many as fit in one page."
+    )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
-        """Return the stored ``{key path: summary}`` map, with no configuration content.
+        """Return the stored ``{key path: summary}`` map, one branch of it, or a page of it.
 
-        The map is written by whoever created or updated the setup, and the only read that
-        carries it is the setup search — so this restates a search for one id rather than
-        deriving a map locally, which would discard the written summaries. A setup stored
-        before the map existed returns an empty one.
+        The map is the one written by whoever created or updated the setup, read from the
+        current version rather than from the search index, which may lag a write. A setup
+        stored before the map existed has an empty one.
 
         Returns:
-            The key map, or an empty dict when the setup carries none.
+            The map (or its branch) when it fits ``structure_max_chars`` of ``ServicesManagerSettings``,
+            else with ``offset`` / ``limit`` a ``{entries, offset, total, next_offset}`` page sorted by path.
+
+        Raises:
+            ValueError: An unpaged map (or branch) larger than one page.
         """
-        await ctx.ensure_kind(self.setup_id)
-        return await ctx.structure_of(self.setup_id)
+        setup = await ctx.ensure_kind(self.setup_id)
+        branch = self.prefix
+        entries = {
+            path: text
+            for path, text in (setup.current_setup_version.structure or {}).items()
+            if branch is None or path == branch or path.startswith((f"{branch}.", f"{branch}["))
+        }
+        budget = get_services_manager_settings().structure_max_chars
+        if self.offset is None and self.limit is None:
+            chars = len(json.dumps(entries, ensure_ascii=False))
+            if chars <= budget:
+                return entries
+            msg = (
+                f"The structure has {len(entries)} entries, {chars} characters, too large to return whole "
+                f"(limit {budget}): page it with offset and limit, narrow it with prefix, or find entries "
+                "with search_structure."
+            )
+            raise ValueError(msg)
+        offset = self.offset or 0
+        page, next_offset = JsonStructure.page(dict(sorted(entries.items())), offset, self.limit, budget)
+        return {"entries": page, "offset": offset, "total": len(entries), "next_offset": next_offset}
+
+
+class SearchStructureServiceAction(RegistryAction):
+    """Find the entries of a service's structure map by the words of their key path or description."""
+
+    display_name = "Search structure"
+    action: Literal["search_structure"] = "search_structure"
+    setup_id: str = Field(..., description="The service setup id whose structure to search.")
+    query: str = Field(
+        ...,
+        pattern=r"\S",
+        description="Words to find, case-insensitive; an entry matches when every word is in its key path "
+        "or its description (e.g. 'products sku').",
+    )
+    offset: int = Field(default=0, ge=0, description="The first matching entry to return, matches sorted by key path.")
+    limit: int | None = Field(
+        default=None, ge=1, description="How many entries the page holds. Omit it for as many as fit in one page."
+    )
+
+    async def execute(self, ctx: RegistryActionCtx) -> Any:
+        """Return one page of the map entries matching every word of ``query``.
+
+        Returns:
+            ``{entries, offset, total, next_offset}``, entries sorted by path, ``total`` the number of matches.
+        """
+        setup = await ctx.ensure_kind(self.setup_id)
+        words = self.query.lower().split()
+        matches = dict(
+            sorted(
+                (path, text)
+                for path, text in (setup.current_setup_version.structure or {}).items()
+                if all(word in f"{path} {text}".lower() for word in words)
+            )
+        )
+        budget = get_services_manager_settings().structure_max_chars
+        page, next_offset = JsonStructure.page(matches, self.offset, self.limit, budget)
+        return {"entries": page, "offset": self.offset, "total": len(matches), "next_offset": next_offset}
 
 
 class LoadServiceAction(RegistryAction):
@@ -210,13 +313,14 @@ class LoadServiceAction(RegistryAction):
     offset: int | None = Field(
         default=None,
         ge=0,
-        description="Page the list or the text at key: the first item (or character) to return. The answer "
-        "gives the total and the next offset.",
+        description="Page the list, the text or the object at key (the whole configuration without a key): the "
+        "first item, character or key to return. The answer gives the total and the next offset. A part too "
+        "large to return whole is refused unless you page it.",
     )
     limit: int | None = Field(
         default=None,
         ge=1,
-        description="How many items (or characters) the page holds. Omit it for as many as fit in one page.",
+        description="How many items, characters or keys the page holds. Omit it for as many as fit in one page.",
     )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
@@ -227,65 +331,103 @@ class LoadServiceAction(RegistryAction):
         carries no field the caller could use to notice it read the wrong kind. The read
         itself passes ``key`` to the setup service, so the narrowing happens where the
         document lives; a key the configuration does not have is refused as not found,
-        which is what the wire does. A part larger than one page (``DK_SERVICE_LOAD_PAGE_CHARS``)
-        is never returned whole: a list or a text answers its first page, an object an outline.
+        which is what the wire does. A part larger than one page (``load_page_chars`` of
+        ``ServicesManagerSettings``) is refused unless the call pages it. A text page ends at
+        the most natural boundary that fits (paragraph, sentence, word) and shares its end with
+        the start of the next page (``text_overlap_chars``).
 
         Returns:
-            The part of the configuration ``key`` names, the whole configuration without one, a
-            ``{page, offset, total, next_offset}`` page, or an ``{outline, hint}`` of a large object.
+            The part of the configuration ``key`` names, the whole configuration without one, or a
+            ``{page, offset, total, next_offset}`` page of a list or an object, or of a text with a
+            ``part`` saying which characters it holds and what follows.
 
         Raises:
-            TypeError: ``offset`` or ``limit`` on a part that is not a list or a text.
+            ValueError: An unpaged part larger than one page, a list item or object value larger than
+                one page, or ``offset`` / ``limit`` on a scalar.
         """
         await ctx.ensure_kind(self.setup_id)
-        setup = await ctx.setup.get_setup({"setup_id": self.setup_id, "structure_key": self.key or ""})
-        content = setup.current_setup_version.content
+        content = (
+            await ctx.setup.get_setup({"setup_id": self.setup_id, "structure_key": self.key or ""})
+        ).current_setup_version.content
         # The setup service answers a keyed read as ``{key: part}``, whatever the key's depth.
         part = content.get(self.key) if self.key else content
-        page_chars = int(os.environ.get("DK_SERVICE_LOAD_PAGE_CHARS", "20000"))
+        page_chars, offset = get_services_manager_settings().load_page_chars, self.offset or 0
         if self.offset is None and self.limit is None:
             chars = len(json.dumps(content, ensure_ascii=False))
             if chars <= page_chars:
                 return content
-            if isinstance(part, dict):
-                outline: dict[str, dict[str, Any]] = {}
-                used = 2
-                for name, value in part.items():
-                    entry = {
-                        "type": type(value).__name__,
-                        "chars": len(json.dumps(value, ensure_ascii=False)),
-                        "items": len(value) if isinstance(value, list | dict) else None,
-                    }
-                    used += len(json.dumps({name: entry}, ensure_ascii=False))
-                    if used > page_chars:
-                        break
-                    outline[name] = entry
-                return {
-                    "outline": outline,
-                    "more_keys": len(part) - len(outline),
-                    "hint": f"{chars} characters, too large to return whole: load one key of the structure map, "
-                    "and page a large list or text with offset and limit.",
-                }
-        offset = self.offset or 0
+            msg = (
+                f"{self.key or 'The configuration'} is "
+                + (
+                    f"a list of {len(part)} items"
+                    if isinstance(part, list)
+                    else f"a text of {len(part)} characters"
+                    if isinstance(part, str)
+                    else f"an object of {len(part)} keys"
+                    if isinstance(part, dict)
+                    else "a value"
+                )
+                + f" ({chars} characters as JSON), too large to return whole "
+                f"(limit {page_chars}): page it with offset and limit, or load a narrower key from the structure."
+            )
+            raise ValueError(msg)
         if isinstance(part, str):
-            end = offset + min(self.limit or page_chars, page_chars)
-        elif isinstance(part, list):
-            last = len(part) if self.limit is None else min(len(part), offset + self.limit)
-            end, used = offset, 2
-            for item in part[offset:last]:
-                used += len(json.dumps(item, ensure_ascii=False)) + 2 * (end > offset)
-                if used > page_chars and end > offset:
-                    break
-                end += 1
-        else:
-            msg = "offset and limit page a list or a text; load a key holding one"
-            raise TypeError(msg)
-        return {
-            "page": part[offset:end],
-            "offset": offset,
-            "total": len(part),
-            "next_offset": end if end < len(part) else None,
-        }
+            capacity = min(page_chars, (self.limit or page_chars) + 2)
+            lead = min(get_services_manager_settings().text_overlap_chars, capacity // 4) if offset < len(part) else 0
+            # The page opens on the end of the previous one, from the first word inside its last ``lead``
+            # characters; the next page always starts where this one ends, so pages never shrink.
+            word = re.search(r"\s\S", part[max(0, offset - lead) : offset])
+            start = max(0, offset - lead) + word.start() + 1 if word else max(0, offset - lead)
+            # The splitter ends the page at the most natural boundary that fits (paragraph, sentence, word), sized
+            # as JSON so escapes count; a window of two pages is enough to find it.
+            end = offset + len(
+                next(
+                    iter(
+                        TextSplitter.from_callback(
+                            lambda piece: len(json.dumps(piece, ensure_ascii=False)),
+                            max(capacity // 2, capacity - len(json.dumps(part[start:offset], ensure_ascii=False)) + 2),
+                            trim=False,
+                        ).chunks(part[offset : offset + 2 * capacity])
+                    ),
+                    "",
+                )
+            )
+            return {
+                "page": part[start:end],
+                "part": f"characters {start}-{end} of {len(part)}"
+                + (
+                    f"; its first {offset - start} characters repeat the end of the previous page"
+                    if start < offset
+                    else ""
+                )
+                + (
+                    "; last page"
+                    if end >= len(part)
+                    else f"; about {-(-(len(part) - end) // max(1, end - offset - lead))} more pages; "
+                    f"the next page starts at {end}"
+                ),
+                "offset": start,
+                "total": len(part),
+                "next_offset": end if end < len(part) else None,
+            }
+        if isinstance(part, list | dict):
+            page, next_offset = JsonStructure.page(part, offset, self.limit, page_chars)
+            # A page holds one item even when it alone is over the budget, so paging progresses; that item
+            # is never handed back whole: the model is told which key to load and page instead.
+            if len(page) == 1:
+                name, value = next(iter(page.items())) if isinstance(page, dict) else (offset, page[0])
+                chars = len(json.dumps(value, ensure_ascii=False))
+                if chars > page_chars:
+                    msg = (
+                        f"{JsonStructure.child(self.key, name)} alone is {chars} characters, more than one page "
+                        f"(limit {page_chars}): load key {JsonStructure.child(self.key, name)} and page it with "
+                        f"offset and limit, then continue here at offset {offset + 1}."
+                    )
+                    raise ValueError(msg)
+            return {"page": page, "offset": offset, "total": len(part), "next_offset": next_offset}
+        # A ValueError, not a TypeError: it is the model's request that is wrong, answered as a plain refusal.
+        msg = "offset and limit page a list, a text or an object; load a key holding one"
+        raise ValueError(msg)
 
 
 class UpdateServiceAction(UpdateAction):
@@ -293,6 +435,10 @@ class UpdateServiceAction(UpdateAction):
 
     The map belongs to the content it describes, and an update rewrites all of it, so the call
     carries a new map, as create does; the stored one is replaced by it.
+
+    Scope: rewrites the whole configuration and the whole structure map, and sets the name (required: send the
+    current one to keep it); the documentation changes only when given. Cuts a new version; visibility and
+    history are kept.
     """
 
     structure: dict[str, str] = Field(
@@ -321,23 +467,16 @@ class UpdateServiceAction(UpdateAction):
         return ServiceReceipt.of(saved, "", self.content)
 
 
-class ServiceEditAction(RegistryAction):
-    """Base of ``patch``, ``append`` and ``remove``: edit one element and cut a new version.
+class ServiceRevisionAction(RegistryAction):
+    """Base of every partial service write: change part of a version and cut a new version from it.
 
     The new version inherits everything the call does not change — the rest of the content,
-    the name, the documentation and the key map entries outside the element — so the caller
-    sends only the element. Abstract: each subclass edits the content and the map its own way.
+    the name, the documentation and the key map entries the call does not touch — so the caller
+    sends only what changes. Abstract: each subclass edits the content and the map its own way.
     """
 
     writes: ClassVar[bool] = True
     setup_id: str = Field(..., description="The service setup id to edit.")
-    path: str = Field(
-        ...,
-        min_length=1,
-        description="Key path of the element, in the structure map's syntax: nested keys joined "
-        'with "." (llm.model), a key containing . [ ] " or \\ bracket-quoted (limits["max.tokens"]), '
-        "a list element indexed from 0 (tools[0]).",
-    )
     setup_version_id: str | None = Field(
         default=None,
         description="The version to edit, from a ``list_versions`` ``setup_version_id``. Omit to edit "
@@ -362,7 +501,7 @@ class ServiceEditAction(RegistryAction):
         """
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
-        """Edit the base version's content at ``path`` and cut a new version from it.
+        """Edit the base version and cut a new version from it.
 
         The read and the write run under the service's lock, so a parallel edit starts from this one's result.
 
@@ -394,13 +533,30 @@ class ServiceEditAction(RegistryAction):
         return ServiceReceipt.of(saved, path, content)
 
 
+class ServiceEditAction(ServiceRevisionAction):
+    """Base of ``patch``, ``append`` and ``remove``: edit the one element at ``path``."""
+
+    path: str = Field(
+        ...,
+        min_length=1,
+        description="Key path of the element, in the structure map's syntax: nested keys joined "
+        'with "." (llm.model), a key containing . [ ] " or \\\\ bracket-quoted (limits["max.tokens"]), '
+        "a list element indexed from 0 (tools[0]).",
+    )
+
+
 class ServiceWriteAction(ServiceEditAction):
     """Base of ``patch`` and ``append``: write ``value`` at ``path``, with the map entries describing it.
 
     Abstract: each subclass decides how ``value`` lands in the content.
     """
 
-    value: Any = Field(..., description="The JSON value to write there; null is written as null.")
+    # Typed, not Any: an untyped field let a model send a text escaped a second time (DEV-949 run).
+    value: str | int | float | bool | list[Any] | dict[str, Any] | None = Field(
+        ...,
+        description="The JSON value to write there; null is written as null. A text is sent as plain text, "
+        "with real line breaks and accents, never as an escaped copy.",
+    )
     structure: dict[str, str] = Field(
         ...,
         description="Map of key path -> one-line summary for the element this call writes, as on "
@@ -442,7 +598,7 @@ class ServiceWriteAction(ServiceEditAction):
         if misplaced:
             msg = (
                 f"structure keys {misplaced} do not name the written element {written!r} or a key inside "
-                "it; nothing was written"
+                "it; nothing was written. To describe other parts without rewriting them, use update_structure"
             )
             raise ValueError(msg)
         return written, {**JsonStructure.prune(structure, written), **self.structure}
@@ -454,6 +610,10 @@ class PatchServiceAction(ServiceWriteAction):
     ``path`` must already exist — a key, a whole section or a list item; it is replaced by
     ``value``. To add something new use ``append``; to rewrite the whole configuration use
     ``update``.
+
+    Scope: the configuration at ``path`` only (the element is replaced) and the structure map entries at or
+    under ``path``. The name, the documentation, the rest of the configuration and the other map entries are
+    kept. Cuts a new version.
     """
 
     display_name = "Patch"
@@ -476,14 +636,18 @@ class AppendServiceAction(ServiceWriteAction):
     ``value`` on a ``path`` holding a text is added at its end. Otherwise ``path`` must not exist
     yet: it is created, with any missing parent objects (a list holding ``items``). To change an
     element that already exists use ``patch``.
+
+    Scope: the configuration at ``path`` only (a new key, list items, or text added at the end of a text) and
+    the structure map entries describing what is added. Never changes an existing value; the name, the
+    documentation, the rest of the configuration and the other map entries are kept. Cuts a new version.
     """
 
     display_name = "Append"
     action: Literal["append"] = "append"
-    value: Any = Field(
+    value: str | int | float | bool | list[Any] | dict[str, Any] | None = Field(
         default=None,
         description="The one JSON value to add (null is written as null), or a text to add at the end of the "
-        "text at path. Omit it when you send items.",
+        "text at path, sent as plain text with real line breaks and accents. Omit it when you send items.",
     )
     items: list[Any] | None = Field(
         default=None,
@@ -532,9 +696,9 @@ class AppendServiceAction(ServiceWriteAction):
                 outside ``path``.
         """
         current = JsonStructure.resolve(content, [self.path]).get(self.path)
-        if self.items is None and not (isinstance(current, str) and isinstance(self.value, str)):
-            return super()._edit(content, structure)
         if self.items is None:
+            if not isinstance(current, str) or not isinstance(self.value, str):
+                return super()._edit(content, structure)
             JsonStructure.patch(content, self.path, current + self.value)
             written = self.path
         elif isinstance(current, list):
@@ -556,6 +720,10 @@ class RemoveServiceAction(ServiceEditAction):
     ``path`` must exist. Its structure map entries go with it; removing a list item moves the
     later items down one index, and their entries follow. To remove the whole service use
     ``delete``.
+
+    Scope: the configuration at ``path`` only (the key or list item is removed) and its structure map entries;
+    the entries of the later items of a list are renumbered. The name, the documentation and the rest of the
+    configuration are kept. Cuts a new version.
     """
 
     display_name = "Remove"
@@ -573,6 +741,59 @@ class RemoveServiceAction(ServiceEditAction):
         """
         JsonStructure.remove(content, self.path)
         return self.path, JsonStructure.forget(structure, self.path)
+
+
+class UpdateStructureServiceAction(ServiceRevisionAction):
+    """Complete or correct a service's structure map without touching its configuration.
+
+    The entries are merged into the stored map: a key already described gets the new
+    description, the others are kept, and an empty description removes the entry. Every
+    described path must exist in the configuration. Send large maps in batches of about 100
+    entries; each call cuts a new version with the same content.
+
+    Scope: only the structure map. The configuration, the name and the documentation are copied unchanged into
+    the new version.
+    """
+
+    display_name = "Update structure"
+    action: Literal["update_structure"] = "update_structure"
+    entries: dict[str, str] = Field(
+        ...,
+        min_length=1,
+        description="Map entries to merge: key path (copied from the configuration's own keys, in the "
+        "structure map's syntax, e.g. products[12]) -> what lives there. An empty description removes "
+        "that entry. Paths not given keep their entry.",
+    )
+
+    def _edit(self, content: dict[str, Any], structure: dict[str, str]) -> tuple[str, dict[str, str]]:
+        """Merge ``entries`` into the map, leaving the content as it is.
+
+        Args:
+            content: A copy of the base version's configuration; only read.
+            structure: The base version's stored map.
+
+        Returns:
+            An empty path (the whole configuration) and the merged, clipped map.
+
+        Raises:
+            ValueError: A described path does not exist in the configuration; nothing is written.
+        """
+        described = [path for path, text in self.entries.items() if text]
+        found = JsonStructure.resolve(content, described)
+        unknown = [path for path in described if path not in found]
+        if unknown:
+            msg = (
+                f"{len(unknown)} described paths are not in the configuration: {unknown[:20]}; copy paths from "
+                "the configuration (load or structure) and send the call again; nothing was written"
+            )
+            raise ValueError(msg)
+        merged = dict(structure)
+        for path, text in self.entries.items():
+            if text:
+                merged[path] = text
+            elif path in merged:
+                logger.info("update_structure: map entry removed: %s = %r", path, merged.pop(path))
+        return "", JsonStructure.clip(merged)
 
 
 class ServiceSection(BaseModel):
@@ -622,6 +843,10 @@ class GenerateServiceAction(RegistryAction):
     ``sections``. Each section is written by a separate model call that sees only the brief, the
     outline of all sections and its own instructions, so every call stays small; the parts are
     merged into the current version and saved once.
+
+    Scope: the configuration at each section's ``path`` (pushed onto a list, replaced, or created) and one
+    structure map entry per section. The name, the documentation, the rest of the configuration and the other
+    map entries are kept. Cuts one new version for all sections.
     """
 
     display_name = "Generate"
@@ -638,6 +863,9 @@ class GenerateServiceAction(RegistryAction):
 
     async def _write(self, writer: Model, gate: asyncio.Semaphore, outline: str, section: ServiceSection) -> Any:
         """Have ``writer`` produce one section's JSON value, retrying once on a reply that is not JSON.
+
+        The reply is streamed: the proxy cuts a call that sends nothing for 120 s, and a section written as
+        one block arrives only at the end.
 
         Args:
             writer: The model that writes the section.
@@ -666,9 +894,12 @@ class GenerateServiceAction(RegistryAction):
         async with gate:
             started = time.monotonic()
             for _ in range(2):
-                response = await writer.aresponse(messages=list(messages))
-                text = str(response.content or "").strip().removeprefix("```json").removeprefix("```")
-                text = text.removesuffix("```").strip()
+                text = "".join([
+                    chunk.content
+                    async for chunk in writer.ainvoke_stream(list(messages), Message(role="assistant"))
+                    if isinstance(chunk.content, str)
+                ]).strip()
+                text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
                 try:
                     value = json.loads(text)
                 except json.JSONDecodeError as error:
@@ -678,8 +909,9 @@ class GenerateServiceAction(RegistryAction):
                         Message(role="user", content=f"That was not valid JSON ({error}). Reply with the JSON only."),
                     ]
                     continue
+                # TODO(validate): WRITER-STREAM sections stream; with proxy keepalive no 504 at 120 s
                 logger.info(
-                    "generate: section %s written in %.0fs (%d chars)",
+                    "[VALIDATE WRITER-STREAM] generate: section %s written in %.0fs (%d chars)",
                     section.path,
                     time.monotonic() - started,
                     len(text),
@@ -691,8 +923,8 @@ class GenerateServiceAction(RegistryAction):
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Write every section concurrently, then merge them into the current version and save it once.
 
-        Sections are written at most ``DK_SERVICE_WRITER_CONCURRENCY`` at a time. The merge runs under the
-        service's lock on the version current at save time, so an edit made meanwhile is kept. A failed
+        Sections are written at most ``DIGITALKIN_SERVICES_MANAGER_WRITER_CONCURRENCY`` at a time. The merge
+        runs under the service's lock on the version current at save time, so an edit made meanwhile is kept. A failed
         section is reported and logged, never dropped in silence; a cancelled mission saves nothing.
 
         Returns:
@@ -705,7 +937,7 @@ class GenerateServiceAction(RegistryAction):
         if ctx.writer is None:
             msg = "generate needs a model to write the sections and none is bound; write the parts with append"
             raise ValueError(msg)
-        gate = asyncio.Semaphore(int(os.environ.get("DK_SERVICE_WRITER_CONCURRENCY", "4")))
+        gate = asyncio.Semaphore(get_services_manager_settings().writer_concurrency)
         outline = "\n".join(f"- {section.path}: {section.summary}" for section in self.sections)
         replies = await asyncio.gather(
             *(self._write(ctx.writer, gate, outline, section) for section in self.sections), return_exceptions=True
@@ -727,6 +959,7 @@ class GenerateServiceAction(RegistryAction):
                 if error is None:
                     try:
                         SetupContentValidator.reject_unsafe_keys({section.path: value})
+                        SetupContentValidator.reject_escaped_text({section.path: value})
                         replaced = JsonStructure.place(content, section.path, value)
                     except ValueError as refused:
                         error = refused
@@ -778,11 +1011,13 @@ ServiceActions = Annotated[
     | CreateServiceAction
     | SearchAction
     | StructureServiceAction
+    | SearchStructureServiceAction
     | LoadServiceAction
     | UpdateServiceAction
     | PatchServiceAction
     | AppendServiceAction
     | RemoveServiceAction
+    | UpdateStructureServiceAction
     | GenerateServiceAction
     | DeleteAction
     | ChangeVisibilityAction

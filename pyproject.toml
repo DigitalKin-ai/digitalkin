@@ -42,7 +42,10 @@
 version = "1.0.6"
 
     [project.optional-dependencies]
-        agno = [ "agno>=3.1.8,<4" ]
+    agno = [
+        "agno>=3.1.8,<4",
+        "semantic-text-splitter>=0.27",
+    ]
         langfuse = [
             "langfuse>=4.11.0",
             "openinference-instrumentation-agno>=1.0.15",
