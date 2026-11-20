@@ -1437,6 +1437,7 @@ dev = [
     { name = "pre-commit", version = "4.7.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyright" },
     { name = "ruff" },
+    { name = "semantic-text-splitter" },
     { name = "twine" },
     { name = "types-grpcio" },
     { name = "types-grpcio-health-checking" },
@@ -1502,6 +1503,7 @@ tests = [
     { name = "pytest-html" },
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
+    { name = "semantic-text-splitter" },
 ]
 
 [package.metadata]
@@ -1552,6 +1554,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pyright", specifier = ">=1.1.411" },
     { name = "ruff", specifier = ">=0.15.20" },
+    { name = "semantic-text-splitter", specifier = ">=0.27" },
     { name = "twine", specifier = ">=6.2.0" },
     { name = "types-grpcio", specifier = ">=1.82.1.20260711" },
     { name = "types-grpcio-health-checking", specifier = ">=1.0.0.20260518" },
@@ -1607,6 +1610,7 @@ tests = [
     { name = "pytest-html", specifier = ">=4.2.0" },
     { name = "pytest-json-report", specifier = ">=1.5.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "semantic-text-splitter", specifier = ">=0.27" },
 ]
 
 [[package]]
