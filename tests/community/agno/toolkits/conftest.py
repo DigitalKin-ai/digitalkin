@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from digitalkin.models.settings.services_manager import get_services_manager_settings
+
 
 class _FakeToolkit:
     """Minimal stand-in for ``agno.tools.Toolkit``."""
@@ -52,6 +54,18 @@ def _install_fake_agno() -> dict[str, Any]:
 # Module-level install: conftest imports before the test modules in this directory,
 # so their module-level toolkit imports resolve against the fake.
 _SAVED_MODULES = _install_fake_agno()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_services_manager_settings() -> Any:
+    """Drop the cached ``services_manager`` limits around each test, so an env change never leaks.
+
+    Yields:
+        None. The cache is cleared again at teardown.
+    """
+    get_services_manager_settings.cache_clear()
+    yield
+    get_services_manager_settings.cache_clear()
 
 
 @pytest.fixture(scope="session", autouse=True)

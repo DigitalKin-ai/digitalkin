@@ -86,7 +86,7 @@ class TestWiring:
         assert model.extra_body == {"litellm_session_id": "mission-1"}
         assert model.request_params == {
             "drop_params": True,
-            "num_retries": 2,
+            "num_retries": 0,
             "metadata": {CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"},
         }
         assert model.cancel_event is event
@@ -97,7 +97,7 @@ class TestWiring:
 
         assert model.extra_headers == {}
         assert model.extra_body is None
-        assert model.request_params == {"drop_params": True, "num_retries": 2}
+        assert model.request_params == {"drop_params": True, "num_retries": 0}
 
     def test_cost_tracking_is_registered_once(self) -> None:
         SafeLiteLLM.from_spec(_spec("gpt-5"))  # type: ignore[arg-type]
