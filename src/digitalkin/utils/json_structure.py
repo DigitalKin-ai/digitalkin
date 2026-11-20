@@ -77,6 +77,40 @@ class JsonStructure:
         return values
 
     @classmethod
+    def canonical(cls, content: Any, path: str) -> str:
+        """Write a list index joined with "." (``items.0.title``) the grammar's way (``items[0].title``).
+
+        Models (Gemini) often index a list that way. The backend resolves only the bracket form, so such a
+        path names nothing there. A digit key becomes an index only where ``content`` holds a list at that
+        point: an object key ``"0"`` stays a key, and so does a digit key below an element that does not
+        exist yet.
+
+        Args:
+            content: The document the path addresses.
+            path: A key path from the model.
+
+        Returns:
+            The path in the grammar's form; ``path`` itself when it has nothing to rewrite or is malformed
+            (the caller's own parse refuses it).
+        """
+        try:
+            segments = cls._decode(path)
+        except ValueError:
+            return path
+        node, rewritten = content, False
+        for position, segment in enumerate(segments):
+            if isinstance(segment, str) and segment.isascii() and segment.isdigit() and isinstance(node, list):
+                segments[position] = int(segment)
+                rewritten = True
+            node = cls._follow(node, [segments[position]])[1]
+        if not rewritten:
+            return path
+        written = cls._encode(segments)
+        # TODO(validate): DOTTED-INDEX a dotted list index from a model is stored and edited in the bracket form
+        logger.info("[VALIDATE DOTTED-INDEX] json structure: read %s as %s", path, written)
+        return written
+
+    @classmethod
     def patch(cls, content: dict[str, Any], path: str, value: Any) -> None:
         """Replace, in place, the value at a path that already exists.
 

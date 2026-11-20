@@ -190,7 +190,10 @@ class CreateServiceAction(RegistryAction):
             The receipt of the created service.
         """
         setup = await ctx.setup.create_service_setup(
-            self.name, self.content, documentation=self.documentation, structure=self.structure
+            self.name,
+            self.content,
+            documentation=self.documentation,
+            structure={JsonStructure.canonical(self.content, path): text for path, text in self.structure.items()},
         )
         return ServiceReceipt.of(setup, "", self.content)
 
@@ -323,7 +326,7 @@ class LoadServiceAction(RegistryAction):
         description="How many items, characters or keys the page holds. Omit it for as many as fit in one page.",
     )
 
-    async def execute(self, ctx: RegistryActionCtx) -> Any:
+    async def execute(self, ctx: RegistryActionCtx) -> Any:  # ruff: ignore[too-many-locals] - one paging path per kind
         """Return the service's configuration, the part ``key`` names, or a page of it.
 
         Guards the object type first: without it ``load`` would happily return a tool's
@@ -392,6 +395,11 @@ class LoadServiceAction(RegistryAction):
                     "",
                 )
             )
+            # A full page moves on by its capacity less the repeated lead; one that ends early on a boundary says
+            # nothing about the next ones, so it never sizes the estimate.
+            more = -(-(len(part) - end) // (capacity - lead))
+            # TODO(validate): PAGE-ESTIMATE the "more pages" of a text page matches the pages read after it
+            logger.info("[VALIDATE PAGE-ESTIMATE] text page %d-%d of %d: about %d more", start, end, len(part), more)
             return {
                 "page": part[start:end],
                 "part": f"characters {start}-{end} of {len(part)}"
@@ -400,12 +408,7 @@ class LoadServiceAction(RegistryAction):
                     if start < offset
                     else ""
                 )
-                + (
-                    "; last page"
-                    if end >= len(part)
-                    else f"; about {-(-(len(part) - end) // max(1, end - offset - lead))} more pages; "
-                    f"the next page starts at {end}"
-                ),
+                + ("; last page" if end >= len(part) else f"; about {more} more pages; the next page starts at {end}"),
                 "offset": start,
                 "total": len(part),
                 "next_offset": end if end < len(part) else None,
@@ -452,9 +455,11 @@ class UpdateServiceAction(UpdateAction):
         """Carry the refreshed map onto the new revision.
 
         Returns:
-            The ``structure`` entry for the update payload.
+            The ``structure`` entry for the update payload, list indices in the bracket form.
         """
-        return {"structure": self.structure}
+        return {
+            "structure": {JsonStructure.canonical(self.content, path): text for path, text in self.structure.items()}
+        }
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Cut the new version under the service's lock, then describe it instead of echoing it.
@@ -489,6 +494,14 @@ class ServiceRevisionAction(RegistryAction):
     )
 
     @abstractmethod
+    def _bracket(self, content: dict[str, Any]) -> None:
+        """Rewrite the call's paths with a dotted list index the grammar's way (``items.0`` -> ``items[0]``).
+
+        Args:
+            content: The base version's configuration, which says where a list is.
+        """
+
+    @abstractmethod
     def _edit(self, content: dict[str, Any], structure: dict[str, str]) -> tuple[str, dict[str, str]]:
         """Edit ``content`` in place and return where, with the map describing the result.
 
@@ -520,6 +533,7 @@ class ServiceRevisionAction(RegistryAction):
                     msg = f"{self.setup_version_id} is not a version of {self.setup_id}; refused"
                     raise ValueError(msg)
             content = copy.deepcopy(base.content)
+            self._bracket(content)
             path, structure = self._edit(content, base.structure or {})
             content = SetupContentValidator.reject_unsafe_keys(content)
             saved = await ctx.setup.update_setup({
@@ -543,6 +557,14 @@ class ServiceEditAction(ServiceRevisionAction):
         'with "." (llm.model), a key containing . [ ] " or \\\\ bracket-quoted (limits["max.tokens"]), '
         "a list element indexed from 0 (tools[0]).",
     )
+
+    def _bracket(self, content: dict[str, Any]) -> None:
+        """Rewrite ``path`` with its list indices in the bracket form.
+
+        Args:
+            content: The base version's configuration.
+        """
+        self.path = JsonStructure.canonical(content, self.path)
 
 
 class ServiceWriteAction(ServiceEditAction):
@@ -568,6 +590,15 @@ class ServiceWriteAction(ServiceEditAction):
         "written is worth describing. Keep each description under 512 characters — longer ones are "
         "trimmed.",
     )
+
+    def _bracket(self, content: dict[str, Any]) -> None:
+        """Rewrite ``path`` and the ``structure`` keys with their list indices in the bracket form.
+
+        Args:
+            content: The base version's configuration.
+        """
+        super()._bracket(content)
+        self.structure = {JsonStructure.canonical(content, path): text for path, text in self.structure.items()}
 
     @abstractmethod
     def _apply(self, content: dict[str, Any]) -> str:
@@ -764,6 +795,14 @@ class UpdateStructureServiceAction(ServiceRevisionAction):
         "structure map's syntax, e.g. products[12]) -> what lives there. An empty description removes "
         "that entry. Paths not given keep their entry.",
     )
+
+    def _bracket(self, content: dict[str, Any]) -> None:
+        """Rewrite the ``entries`` keys with their list indices in the bracket form.
+
+        Args:
+            content: The base version's configuration.
+        """
+        self.entries = {JsonStructure.canonical(content, path): text for path, text in self.entries.items()}
 
     def _edit(self, content: dict[str, Any], structure: dict[str, str]) -> tuple[str, dict[str, str]]:
         """Merge ``entries`` into the map, leaving the content as it is.
@@ -1006,6 +1045,29 @@ class GenerateServiceAction(RegistryAction):
         )
 
 
+class SetServiceVersionAction(SetVersionAction):
+    """Activate one of a service's existing versions — the way to undo a bad write.
+
+    Takes a ``setup_version_id`` from ``list_versions``; it creates nothing, so rolling forward again is just
+    another ``set_version`` on the newer id. Nothing is lost either way.
+
+    Scope: only which existing version is active. No version is created or edited.
+    """
+
+    async def execute(self, ctx: RegistryActionCtx) -> Any:
+        """Make an existing version the current one, then describe it instead of echoing its configuration.
+
+        Returns:
+            The receipt of the activated version.
+        """
+        saved = await super().execute(ctx)
+        # TODO(validate): SET-VERSION-RECEIPT a service set_version answers a receipt, not the version's content
+        logger.info(
+            "[VALIDATE SET-VERSION-RECEIPT] set_version: %s now serves %s", self.setup_id, self.setup_version_id
+        )
+        return ServiceReceipt.of(saved, "", saved.current_setup_version.content)
+
+
 ServiceActions = Annotated[
     GetServiceAction
     | CreateServiceAction
@@ -1022,6 +1084,6 @@ ServiceActions = Annotated[
     | DeleteAction
     | ChangeVisibilityAction
     | ListVersionsAction
-    | SetVersionAction,
+    | SetServiceVersionAction,
     Field(discriminator="action"),
 ]

@@ -672,3 +672,51 @@ class TestPage:
         assert JsonStructure.child("catalog", "products") == "catalog.products"
         assert JsonStructure.child("catalog.products", 3) == "catalog.products[3]"
         assert JsonStructure.child("limits", "max.tokens") == 'limits["max.tokens"]'
+
+
+class TestCanonical:
+    """A list index joined with "." (``items.0.title``, as Gemini writes it) is read as ``items[0].title``.
+
+    The backend resolves only the bracket form, so a dotted index stored in a map or sent to an edit names
+    nothing there.
+    """
+
+    @staticmethod
+    def _document() -> dict[str, Any]:
+        return {"items": [{"title": "a"}], "matrix": [[1], [2, 3]], "by_id": {"0": "zero"}, "limits": {"max.tokens": 1}}
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("items.0.title", "items[0].title"),
+            ("items.0", "items[0]"),
+            ("items.30.title", "items[30].title"),
+            ("matrix.1.0", "matrix[1][0]"),
+            ("items[0].title", "items[0].title"),
+            ("by_id.0", "by_id.0"),
+            ('limits["max.tokens"]', 'limits["max.tokens"]'),
+            ("absent.0", "absent.0"),
+            ("a[", "a["),
+        ],
+    )
+    def test_a_dotted_index_on_a_list_is_bracketed(self, path: str, expected: str) -> None:
+        """Only a digit key that lands on a list is an index; an object key "0" stays a key, the rest is kept."""
+        assert JsonStructure.canonical(self._document(), path) == expected
+
+    def test_a_rewrite_is_logged_with_both_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded = Mock()
+        monkeypatch.setattr(json_structure.logger, "info", recorded)
+
+        JsonStructure.canonical(self._document(), "items.0.title")
+
+        assert "[VALIDATE DOTTED-INDEX]" in recorded.call_args.args[0]
+        assert {"items.0.title", "items[0].title"} <= set(recorded.call_args.args)
+
+    def test_a_path_with_nothing_to_rewrite_logs_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded = Mock()
+        monkeypatch.setattr(json_structure.logger, "info", recorded)
+
+        JsonStructure.canonical(self._document(), "items[0].title")
+
+        recorded.assert_not_called()

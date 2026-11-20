@@ -35,8 +35,10 @@ from digitalkin.community.agno.toolkits.registry.services.action import (
     RemoveServiceAction,
     SearchStructureServiceAction,
     ServiceSection,
+    SetServiceVersionAction,
     StructureServiceAction,
     UpdateServiceAction,
+    UpdateStructureServiceAction,
 )
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.services.registry import (
@@ -165,7 +167,7 @@ class TestExposedSurface:
             "GenerateServiceAction",
             "DeleteAction",
             "ChangeVisibilityAction",
-            "SetVersionAction",
+            "SetServiceVersionAction",
         ]
 
         assert [name for name in writes if "Scope:" not in defs[name]["description"]] == []
@@ -1386,17 +1388,16 @@ class TestScopedRead:
 
     @pytest.mark.regression
     async def test_set_version_serves_the_structure(self) -> None:
-        """Regression (QA D1): the version a SetCurrentSetupVersion returns carries its map too."""
+        """Regression (QA D1): the version a set_version activates serves its map too."""
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
         versions = _env(await svc.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["versions"]
 
-        env = _env(
-            await svc.services_manager(
-                SetVersionAction(setup_id=setup_id, setup_version_id=versions[0]["setup_version_id"])
-            )
+        await svc.services_manager(
+            SetServiceVersionAction(setup_id=setup_id, setup_version_id=versions[0]["setup_version_id"])
         )
 
-        assert env["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
+        env = _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))
+        assert env["output"] == {"llm.model": "which model answers"}
 
     async def test_change_visibility_serves_the_structure(self) -> None:
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
@@ -2401,6 +2402,97 @@ class TestRemoveAction:
         assert env["metadata"]["success"] is False
 
 
+class TestDottedListIndex:
+    """A list index joined with "." (``items.0.title``, as Gemini writes it) is used as ``items[0].title``.
+
+    The backend resolves only the bracket form: a dotted entry stored by create named nothing, and patch,
+    append and remove refused the dotted path as not found (campaign r1, D-DOTIDX).
+    """
+
+    _CONTENT: ClassVar[dict[str, Any]] = {"items": [{"title": "a"}, {"title": "b"}]}
+
+    @classmethod
+    async def _service(cls, structure: dict[str, str]) -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = await manager.services_manager(
+            CreateServiceAction(name="Catalog", content=cls._CONTENT, structure=structure)
+        )
+        return manager, _env(created)["output"]["setup_id"]
+
+    @staticmethod
+    async def _read(manager: ServicesManager, setup_id: str) -> tuple[dict[str, Any], dict[str, str]]:
+        content = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id)))["output"]
+        structure = _env(await manager.services_manager(StructureServiceAction(setup_id=setup_id)))["output"]
+        return content, structure
+
+    @pytest.mark.regression
+    async def test_create_stores_the_bracket_form(self) -> None:
+        manager, setup_id = await self._service({"items": "the items", "items.0.title": "first title"})
+
+        assert (await self._read(manager, setup_id))[1] == {"items": "the items", "items[0].title": "first title"}
+
+    @pytest.mark.regression
+    async def test_update_stores_the_bracket_form(self) -> None:
+        manager, setup_id = await self._service({})
+
+        await manager.services_manager(
+            UpdateServiceAction(
+                setup_id=setup_id, name="Catalog", content=self._CONTENT, structure={"items.1.title": "second"}
+            )
+        )
+
+        assert (await self._read(manager, setup_id))[1] == {"items[1].title": "second"}
+
+    @pytest.mark.regression
+    async def test_patch_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="items.1.title", value="B", structure={"items.1.title": "second title"}
+                )
+            )
+        )
+
+        content, structure = await self._read(manager, setup_id)
+        assert env["output"]["path"] == "items[1].title"
+        assert content["items"][1] == {"title": "B"}
+        assert structure == {"items[1].title": "second title"}
+
+    async def test_append_takes_a_dotted_index_in_its_structure(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(
+                    setup_id=setup_id, path="items", value={"title": "c"}, structure={"items.2": "third item"}
+                )
+            )
+        )
+
+        assert env["output"]["path"] == "items[2]"
+        assert (await self._read(manager, setup_id))[1] == {"items[2]": "third item"}
+
+    @pytest.mark.regression
+    async def test_remove_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="items.0")))
+
+        assert env["output"]["path"] == "items[0]"
+        assert (await self._read(manager, setup_id))[0]["items"] == [{"title": "b"}]
+
+    async def test_update_structure_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        await manager.services_manager(
+            UpdateStructureServiceAction(setup_id=setup_id, entries={"items.0.title": "first title"})
+        )
+
+        assert (await self._read(manager, setup_id))[1] == {"items[0].title": "first title"}
+
+
 class TestWriteReceipts:
     """A service write answers a short receipt, never the configuration (DEV-937).
 
@@ -2490,6 +2582,40 @@ class TestWriteReceipts:
         assert output["setup_version_id"] == (await self._current(manager, setup_id))["id"]
         assert output["content_chars"] == len(json.dumps(content, ensure_ascii=False))
         assert self._BIG not in raw
+
+    @pytest.mark.regression
+    async def test_set_version_answers_a_receipt(self) -> None:
+        """set_version echoed the whole configuration of the version it activated (campaign r1, D-SETVERSION-FULL)."""
+        manager, setup_id = await self._service()
+        first = await self._current(manager, setup_id)
+        await manager.services_manager(
+            UpdateServiceAction(setup_id=setup_id, name="Catalog", content={"products": [self._BIG]}, structure={})
+        )
+
+        raw = await manager.services_manager({
+            "action": "set_version",
+            "setup_id": setup_id,
+            "setup_version_id": first["id"],
+        })
+
+        assert _env(raw)["output"] == {
+            "setup_id": setup_id,
+            "setup_version_id": first["id"],
+            "version": first["version"],
+            "path": "",
+            "content_chars": len(json.dumps(first["content"], ensure_ascii=False)),
+        }
+        assert (await self._current(manager, setup_id))["id"] == first["id"]
+
+    async def test_a_kin_set_version_still_answers_the_setup(self) -> None:
+        """Only service writes answer receipts; the kins and tools managers keep their answers (DEV-937)."""
+        manager = KinsManager(*_stores())
+
+        env = _env(
+            await manager.kins_manager(SetVersionAction(setup_id="setups:isaac", setup_version_id="setups:isaac:v"))
+        )
+
+        assert env["output"]["current_setup_version"]["content"] == {"agent": "x"}
 
     async def test_a_tool_update_still_answers_the_setup(self) -> None:
         """Receipts are a services change: tools and kins keep their full answer."""
@@ -2973,6 +3099,19 @@ class TestTextPages:
         pages, offset = 0, first["next_offset"]
         while offset is not None:
             offset = (await self._page(monkeypatch, offset))["next_offset"]
+            pages += 1
+        estimate = int(first["part"].split("about ")[1].split(" more")[0])
+
+        assert abs(estimate - pages) <= 1
+
+    @pytest.mark.regression
+    async def test_a_short_page_does_not_inflate_the_estimate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A page ending early on a paragraph said "about 2254 more pages" for a few (campaign r1, D-PAGES)."""
+        text = "A short closing paragraph of a few words.\n\n" + " ".join(["longword"] * 600)
+        first = await self._read(monkeypatch, text, 0)
+        pages, offset = 0, first["next_offset"]
+        while offset is not None:
+            offset = (await self._read(monkeypatch, text, offset))["next_offset"]
             pages += 1
         estimate = int(first["part"].split("about ")[1].split(" more")[0])
 
