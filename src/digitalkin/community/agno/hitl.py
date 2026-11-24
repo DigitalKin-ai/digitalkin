@@ -344,6 +344,10 @@ class AgnoHitlRunner:
     member's own :class:`LoadManager`.
     """
 
+    MAX_AUTO_CONTINUES: ClassVar[int] = 100
+    """In-process ``load_manager`` continues of one run: a long task loads many tools, a reload loop
+    never ends, and each continue also resets Agno's ``tool_call_limit``."""
+
     def __init__(
         self,
         *,
@@ -823,7 +827,7 @@ class AgnoHitlRunner:
         # delegations in flight and every id it has closed.
         adapter = AgnoStreamAdapter()
         try:
-            for _ in range(20):
+            for _ in range(self.MAX_AUTO_CONTINUES):
                 # A toolkit loaded by ``load_manager`` is labelled on the continue that follows.
                 adapter.set_toolkits(self._toolkit_map())
                 final_run_output: RunOutput | TeamRunOutput | None = None

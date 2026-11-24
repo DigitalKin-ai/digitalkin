@@ -30,8 +30,10 @@ from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCusto
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 from digitalkin.services.communication.exceptions import ToolCallError
 
-# Default timeout for tool calls in seconds
-DEFAULT_TOOL_TIMEOUT_SECONDS = 300
+# A ceiling for a tool still alive but stuck, as on an await that never returns. A dead tool is
+# caught much sooner: a silent module heartbeats, and ``call_module`` gives up past ``call_timeout_s``
+# without output. Long tool runs are expected, so this is no work budget.
+DEFAULT_TOOL_TIMEOUT_SECONDS = 3600
 
 # Protocol used by tool modules that return OpenAI-style multimodal content
 # (a list of {"type": "text"} / {"type": "image_url"} parts).
@@ -85,7 +87,7 @@ class ModuleToolkit(DkToolkit):
         Args:
             context: ModuleContext providing create_tool_functions.
             tool_module_info: The SDK ToolModuleInfo with tools list.
-            timeout_seconds: Timeout for tool calls in seconds. Default 300s.
+            timeout_seconds: Timeout for tool calls in seconds. Default 3600s.
             allowed_tools: If provided, only include tools whose name is in this set.
                 When None, all tools from the module are included (backwards-compatible).
         """
