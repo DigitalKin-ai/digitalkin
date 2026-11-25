@@ -83,8 +83,13 @@ class TestForSelections:
         assert ModuleToolkits.for_selections(_context(_info()), [_select("setups:ghost", search=True)]) == []
 
     def test_unknown_trigger_names_are_ignored(self) -> None:
+        """A name the module dropped never becomes a tool; the triggers the kin never saw come on (DEV-975)."""
         (toolkit,) = ModuleToolkits.for_selections(_context(_info()), [_select(search=True, ghost_tool=True)])
-        assert _names(toolkit) == {"search"}
+        assert _names(toolkit) == set(TOOL_NAMES)
+
+    def test_a_selection_sharing_no_name_with_the_module_stays_closed(self) -> None:
+        """A module answering with the wrong surface must not hand its tools to the kin."""
+        assert ModuleToolkits.for_selections(_context(_info()), [_select(ghost=True, other=True)]) == []
 
     def test_a_toolkit_that_fails_to_build_is_skipped(self) -> None:
         context = _context(_info())
@@ -128,3 +133,40 @@ class TestBuild:
         toolkits = ModuleToolkits.build(context, [_select(search=True)])
 
         assert [_names(toolkit) for toolkit in toolkits] == [{"search"}, {"a"}]
+
+
+class TestStaleSelections:
+    """A kin saved before its tool renamed triggers gets the new ones on; a partial selection keeps its scope."""
+
+    def test_a_selection_naming_a_removed_trigger_turns_the_absent_ones_on(self) -> None:
+        """The staging RAG kin: search and summary are gone, search_documents and read_document were never saved."""
+        info = _info(tool_names=("search_documents", "read_document", "add_documents", "fs_delete"))
+        selection = _select(search=True, summary=True, add_documents=True, fs_delete=False, healthcheck_ping=True)
+
+        (toolkit,) = ModuleToolkits.for_selections(_context(info), [selection])
+
+        assert _names(toolkit) == {"search_documents", "read_document", "add_documents"}, "fs_delete stays off"
+
+    def test_a_partial_selection_with_current_names_keeps_its_scope(self) -> None:
+        """A kin limited on purpose (kins_manager, a team member) never gains functions."""
+        (toolkit,) = ModuleToolkits.for_selections(_context(_info()), [_select(search=True)])
+
+        assert _names(toolkit) == {"search"}
+
+    def test_sdk_utility_protocols_are_not_stale_names(self) -> None:
+        (toolkit,) = ModuleToolkits.for_selections(_context(_info()), [_select(search=True, healthcheck_ping=True)])
+
+        assert _names(toolkit) == {"search"}
+
+
+class TestToolSelectionEnabled:
+    def test_true_triggers_the_module_exposes(self) -> None:
+        assert _select(search=True, edit=False).enabled(TOOL_NAMES) == {"search"}
+
+    def test_a_stale_name_turns_every_absent_trigger_on(self) -> None:
+        assert _select(search=True, edit=False, ghost=True).enabled(TOOL_NAMES) == {
+            "search",
+            "schema",
+            "import",
+            "export",
+        }

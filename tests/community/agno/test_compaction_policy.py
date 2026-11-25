@@ -179,6 +179,7 @@ class TestForModel:
         assert kwargs["mission_id"] == "mission-1", "the summary is billed to the mission"
         assert kwargs["extra_headers"] == {"langfuse_session_id": "s1"}
         assert kwargs["temperature"] == 0.2
+        assert kwargs["prompt_caching"] is False, "a single summary call never reads its cache back (DEV-977)"
 
     def test_policy_comes_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set(monkeypatch, "WINDOW_RATIO", "0.5")

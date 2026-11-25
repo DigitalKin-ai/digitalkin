@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Collection
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, Field, PlainSerializer, model_validator
@@ -11,6 +12,7 @@ from pydantic_core import CoreSchema
 
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolModuleInfo
+from digitalkin.models.module.utility import UtilityProtocol
 from digitalkin.models.settings.module import get_module_settings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
@@ -21,6 +23,40 @@ class ToolSelection(BaseModel):
 
     setup_id: str = Field(description="Setup ID of the selected tool.")
     triggers: dict[str, bool] = Field(min_length=1, max_length=100, description="Trigger protocols with enabled state.")
+
+    def enabled(self, available: Collection[str]) -> set[str]:
+        """Name the triggers of the module this selection turns on.
+
+        A trigger set to true is on. A trigger absent from the selection is on too when the selection
+        names a trigger the module no longer exposes (SDK utility protocols aside) next to one it still
+        does: it was saved before the module renamed or added triggers, which are on by default.
+        Otherwise an absent trigger stays off, so a selection limited on purpose keeps its scope, and a
+        selection sharing no name with the module (a module answering with the wrong surface) stays
+        closed.
+
+        Args:
+            available: The triggers the module exposes.
+
+        Returns:
+            The available triggers that are on.
+        """
+        on = {name for name, enabled in self.triggers.items() if enabled and name in available}
+        if self.predates(available):
+            on |= {name for name in available if name not in self.triggers}
+        return on
+
+    def predates(self, available: Collection[str]) -> bool:
+        """Tell whether the selection was saved before the module renamed or added triggers.
+
+        Args:
+            available: The triggers the module exposes.
+
+        Returns:
+            True when the selection names a trigger the module no longer exposes (SDK utility
+            protocols aside) next to one it still does.
+        """
+        names = set(self.triggers) - UtilityProtocol.protocols()
+        return bool(names - set(available)) and bool(names & set(available))
 
 
 class ToolReference(BaseModel):
@@ -113,9 +149,9 @@ class ToolReference(BaseModel):
                 return None
             if tool_info is None or not trim:
                 return tool_info
-            enabled = {name for name, on in entry.triggers.items() if on}
-            if not enabled:
+            if not any(entry.triggers.values()):
                 return tool_info
+            enabled = entry.enabled([t.name for t in tool_info.tools])
             return tool_info.model_copy(
                 update={"tools": [t for t in tool_info.tools if t.name in enabled]},
             )
@@ -183,7 +219,9 @@ class ToolReference(BaseModel):
             return None
 
         available = {t.name for t in tool_info.tools}
-        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
+        # A kin's selection may enable the SDK's own healthcheck_* protocols: never a model function, never unknown.
+        utility = UtilityProtocol.protocols()
+        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled and name not in utility}
 
         if enabled_triggers and (unknown := enabled_triggers - available):
             logger.warning(
@@ -192,8 +230,16 @@ class ToolReference(BaseModel):
                 sorted(unknown),
                 sorted(available),
             )
+        if entry.predates(available) and (added := sorted(available - set(entry.triggers))):
+            # TODO(validate): TRIGGER-DEFAULT-ON a kin saved before its tool renamed triggers gets the new ones on
+            logger.warning(
+                "[VALIDATE TRIGGER-DEFAULT-ON] Tool '%s' selection predates the module's triggers: %s turned on "
+                "(not in the kin's selection, on by default); update the kin's selection to choose otherwise",
+                entry.setup_id,
+                added,
+            )
 
-        post_count = len(available & enabled_triggers) if enabled_triggers else len(tool_info.tools)
+        post_count = len(entry.enabled(available)) if enabled_triggers else len(tool_info.tools)
         logger.debug(
             "[perf] tool_resolve: setup_id=%s slug=%s "
             "user_triggers_enabled=%d user_triggers_total=%d "

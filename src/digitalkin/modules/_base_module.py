@@ -27,6 +27,7 @@ from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledO
 from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.module import get_module_settings
+from digitalkin.modules.tool_error import ToolError
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
@@ -639,7 +640,12 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                 await self.context.agui_run.fail(self.context, str(e), RunErrorCode.PERMISSION_DENIED)
         except Exception as e:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
+            if isinstance(e, ToolError):
+                message, retryable = ToolError.redact(e.message), e.retryable
+                logger.warning("Module %s failed: %s", self.name, message, extra=self.context.session.current_ids())
+            else:
+                message, retryable = ToolError.redact(f"{type(e).__name__}: {e}" if str(e) else type(e).__name__), None
+                logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
             logger.info(
                 "module %s failed; stop() still writes stream.end",
                 self.name,
@@ -650,7 +656,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                     ModuleCodeModel(
                         code=RunErrorCode.MODULE_FAILED,
                         short_description="Module execution failed",
-                        message=str(e),
+                        message=message,
+                        retryable=retryable,
                     )
                 )
                 if self.context.agui_run is not None:

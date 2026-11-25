@@ -17,7 +17,7 @@ from digitalkin.models.core.job_manager_models import BackpressureStrategy
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
-pytestmark = pytest.mark.timeout(30)
+pytestmark = [pytest.mark.stress, pytest.mark.timeout(30)]
 
 
 # ============================================================================

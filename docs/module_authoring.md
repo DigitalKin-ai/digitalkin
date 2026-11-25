@@ -60,6 +60,11 @@ class SearchTrigger(TriggerHandler):
 - Built-in triggers `healthcheck_ping`, `healthcheck_services` and `healthcheck_status` are added to every module.
 - The registry of handlers is shared per process: serve one module class per process.
 
+A tool trigger that fails raises `ToolError("what failed and what to do", retryable=True|False)`. The calling agent
+gets `[MODULE_FAILED] <message>` and the retry hint, and the tool call is `failed`. A returned output is always a
+success, even one with an `error` field. Any other exception reaches the agent as `<Type>: <text>`. The SDK masks URL
+query strings and credential values in both, but write the `ToolError` message without them.
+
 `TriggerHandler` mixes in helpers: `add_cost`, `get_cost`, `log_info`/`log_debug`/..., and the AG-UI `send_message`.
 
 ## Inputs and outputs
@@ -334,5 +339,7 @@ Working examples: `examples/redis_demo/`, `examples/bench_module/`, `examples/mo
 | Trigger file not named `*_trigger.py` | Discovery skips it; the protocol has no handler. |
 | `TypeError: <Module>: trigger(s) without display_name: …` | Add `display_name = "…"` to each listed trigger of the tool's input union. |
 | No `storage`/`cost` `config` in `services_config_params` | Strategy construction fails with a missing `config` argument. |
+| Failure returned as an output (`error=`, `success=False`, empty results) | The agent reads it as a success: raise `ToolError`. |
+| `except Exception` around a whole trigger | It also catches `PermissionDeniedError` and hides `PERMISSION_DENIED`: catch the provider's errors only. |
 | `{"hidden": True}` on a setup field | The filter reads `{"ui:widget": "hidden"}`. |
 | `-d local` | The flag's choices are `LOCAL` / `REMOTE`; use `SERVICE_MODE=local` or `-d LOCAL`. |

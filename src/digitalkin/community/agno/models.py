@@ -16,10 +16,21 @@ logger = logging.getLogger(__name__)
 class AgUiRunInput(Protocol):
     """The ``RunAgentInput`` fields the HITL runner reads; ``ag_ui.core.RunAgentInput`` satisfies it."""
 
-    thread_id: str
-    run_id: str
-    messages: list[AgUiMessage]
-    tools: list[AgUiTool] | None
+    @property
+    def thread_id(self) -> str:
+        """AG-UI thread identifier."""
+
+    @property
+    def run_id(self) -> str:
+        """AG-UI run identifier."""
+
+    @property
+    def messages(self) -> list[AgUiMessage]:
+        """Conversation messages."""
+
+    @property
+    def tools(self) -> list[AgUiTool] | None:
+        """Frontend tools available to the agent."""
 
 
 class AgUiStreamInput(DataTrigger):

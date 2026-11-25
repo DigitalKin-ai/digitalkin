@@ -15,6 +15,8 @@ Each manager is then a thin subclass declaring its ``module_type`` and a single
 
 from __future__ import annotations
 
+import asyncio
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
@@ -35,9 +37,11 @@ from digitalkin.utils.setup_content_validator import SetupContentValidator
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
+    from agno.models.base import Model
+
     from digitalkin.models.module import ModuleContext
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
-    from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy
+    from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
 
 
 class BaseActionCtx:
@@ -87,12 +91,73 @@ class RegistryActionCtx(BaseActionCtx):
         module_type: The manager's object type, used to filter searches and tag creates.
         context: Module context; enables pre-write ``content`` validation against the module's
             config schema. ``None`` outside a running job — validation is then skipped.
+        writer: The model that writes ``generate`` sections; ``None`` until the toolkit is bound to a host.
+        locks: One lock per setup id, shared by every manager of the process; an entry lives as
+            long as a write holds or awaits it.
     """
+
+    locks: ClassVar[weakref.WeakValueDictionary[str, asyncio.Lock]] = weakref.WeakValueDictionary()
 
     setup: SetupStrategy
     registry: RegistryStrategy
     module_type: RegistryModuleType
     context: ModuleContext | None = None
+    writer: Model | None = None
+
+    @classmethod
+    def lock(cls, setup_id: str) -> asyncio.Lock:
+        """Return the lock that serializes the read-modify-writes of one setup in this process.
+
+        Args:
+            setup_id: The setup a write is about to read and rewrite.
+
+        Returns:
+            The setup's lock, created on first use.
+        """
+        lock = cls.locks.get(setup_id)
+        if lock is None:
+            lock = cls.locks[setup_id] = asyncio.Lock()
+        elif lock.locked():
+            # TODO(validate): SERVICE-WRITE-LOCK two parallel edits of one service both land
+            logger.info("[VALIDATE SERVICE-WRITE-LOCK] Write on %s waits for another", setup_id)
+        return lock
+
+    async def written_version(self, saved: SetupData, *, current: bool) -> SetupVersionData:
+        """Return the version a revision cut: the one ``saved`` serves, or, staged, the newest one.
+
+        Call it under the setup's lock, so no other write of this process lands in between.
+
+        Args:
+            saved: The setup ``update_setup`` returned.
+            current: Whether the revision was activated (``set_as_current``).
+
+        Returns:
+            The version the revision cut.
+
+        Raises:
+            SetupServiceError: A staged revision that the version history does not show; the write
+                itself is saved.
+        """
+        if current:
+            return saved.current_setup_version
+        versions = (await self.setup.list_setup_versions({"setup_id": saved.id, "limit": 1})).setup_versions
+        if not versions or versions[0].id == saved.current_setup_version.id:
+            logger.error(
+                "Staged revision of %s not found in its history (newest: %s, serving: %s)",
+                saved.id,
+                versions[0].id if versions else None,
+                saved.current_setup_version.id,
+            )
+            msg = f"the staged version of {saved.id} was saved but could not be identified: find it with list_versions"
+            raise SetupServiceError(msg)
+        # TODO(validate): STAGED-RECEIPT a staged write answers the version it cut, which set_version activates
+        logger.info(
+            "[VALIDATE STAGED-RECEIPT] Staged %s of %s (serving %s)",
+            versions[0].id,
+            saved.id,
+            saved.current_setup_version.id,
+        )
+        return versions[0]
 
     async def validate_content(self, module_id: str, content: dict[str, Any]) -> None:
         """Validate ``content`` against the module's config schema before a write (best-effort).
@@ -162,20 +227,6 @@ class RegistryActionCtx(BaseActionCtx):
             msg = f"{setup_id} is not a {self.module_type.value} setup (kind mismatch); refused"
             raise ValueError(msg)
         return setup
-
-    async def structure_of(self, setup_id: str) -> dict[str, str]:
-        """Read a setup's stored key map from the registry search.
-
-        Like every search, it follows the index, which may briefly lag right after a write.
-
-        Args:
-            setup_id: The setup whose map to read.
-
-        Returns:
-            The map, or ``{}`` when the search summary carries none.
-        """
-        found = await self.registry.search_setups(setup_ids=[setup_id], module_types=[self.module_type], limit=1)
-        return found[0].structure if found else {}
 
 
 class RegistryAction(BaseAction[RegistryActionCtx], ABC):

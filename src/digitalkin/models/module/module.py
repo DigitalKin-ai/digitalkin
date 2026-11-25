@@ -1,6 +1,7 @@
 """Module model."""
 
 from enum import Enum, auto
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,26 @@ class ModuleCodeModel(BaseModel):
     code: str = Field(...)
     message: str | None = Field(default=None)
     short_description: str | None = Field(default=None)
+    retryable: bool | None = Field(default=None)
+
+    @staticmethod
+    def failure_text(frame: dict[str, Any]) -> str | None:
+        """Agent-facing text of a module failure frame read from a stream.
+
+        Args:
+            frame: One stream frame as a dict.
+
+        Returns:
+            ``[CODE] message`` with the retry hint, or None when the frame is not a ``ModuleCodeModel``.
+        """
+        code = frame.get("code")
+        if "root" in frame or not isinstance(code, str):
+            return None
+        retryable = frame.get("retryable")
+        hint = " Retrying may succeed." if retryable is True else ""
+        if retryable is False:
+            hint = " Retrying the same call fails again."
+        return f"[{code}] {frame.get('message') or frame.get('short_description') or 'module failed'}{hint}"
 
 
 class ModuleStatus(Enum):

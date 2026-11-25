@@ -27,6 +27,7 @@ from digitalkin.logger import logger
 from digitalkin.models.events import SourceCitation, ToolInfo
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 from digitalkin.services.communication.exceptions import ToolCallError
 
@@ -431,6 +432,11 @@ class ModuleToolkit(DkToolkit):
         default_error = "No successful response received from module"
         if frame is None:
             return default_error
+        failure = ModuleCodeModel.failure_text(frame)
+        if failure is not None:
+            # TODO(validate): TOOL-FAILURE-TEXT the calling agent reads a raising tool's message, not the default
+            logger.info("[VALIDATE TOOL-FAILURE-TEXT] tool failure reaches the agent: %s", failure)
+            return failure
         root = frame.get("root")
         if isinstance(root, dict):
             protocol = root.get("protocol")
@@ -442,9 +448,7 @@ class ModuleToolkit(DkToolkit):
                 return f"[{code}] {message}" if code else str(message)
             if root.get("error"):
                 return str(root["error"])
-        if isinstance(frame.get("error"), str):
-            return str(frame["error"])
-        return default_error
+        return str(frame["error"]) if isinstance(frame.get("error"), str) else default_error
 
     @staticmethod
     async def _drain(
@@ -473,7 +477,9 @@ class ModuleToolkit(DkToolkit):
             await ModuleToolkit._relay_custom_event(context, response)
             root = response.get("root")
             protocol = root.get("protocol", "") if isinstance(root, dict) else ""
-            if protocol in {"stream.error", "stream.cancelled"}:
+            if protocol in {"stream.error", "stream.cancelled"} or (
+                root is None and isinstance(response.get("code"), str)
+            ):
                 last_error = response
                 sentinel_error_seen = True
             elif isinstance(root, dict) and protocol not in {"stream.start", "stream.end", "stream.init"}:

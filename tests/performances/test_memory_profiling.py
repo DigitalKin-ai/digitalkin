@@ -26,7 +26,7 @@ from digitalkin.models.services.services import ServicesMode
 from digitalkin.services.services_models import ServicesStrategy
 
 # Set timeout for all tests in this file (120 seconds)
-pytestmark = pytest.mark.timeout(120)
+pytestmark = [pytest.mark.stress, pytest.mark.timeout(120)]
 
 
 # ============================================================================

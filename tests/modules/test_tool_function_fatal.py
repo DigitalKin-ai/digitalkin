@@ -114,3 +114,14 @@ async def test_stream_cancelled_raises_tool_call_error() -> None:
     with pytest.raises(ToolCallError, match=r"\[CANCELLED\] user_stop"):
         await _drain()
     assert seen == [{"root": {"protocol": "message", "content": "partial"}}]
+
+
+@pytest.mark.asyncio
+async def test_module_failure_frame_raises_tool_call_error() -> None:
+    failure = struct_pb2.Struct()
+    failure.update({"code": "MODULE_FAILED", "message": "upstream 503", "retryable": True})
+    fn = _tool_function([failure])
+
+    with pytest.raises(ToolCallError, match=r"^\[MODULE_FAILED\] upstream 503 Retrying may succeed\.$"):
+        async for _ in fn():
+            pass
