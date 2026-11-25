@@ -61,8 +61,8 @@ class TestStreamingRefusal:
 
         errors = [event for event in events if event.event == RunEvent.run_error]
         assert len(errors) == 1
-        assert errors[0].error_type == "output_check_error"
-        assert "declined" in errors[0].content
+        assert errors[0].error_type == "MODEL_CONTENT_FILTERED"
+        assert "content filter" in errors[0].content
 
     @pytest.mark.asyncio
     async def test_refusal_is_not_retried(self):

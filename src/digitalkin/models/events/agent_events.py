@@ -11,6 +11,8 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
+from digitalkin.models.events.run_error_code import RunErrorCode
+
 
 class AgentRunEvent(str, Enum):
     """Agent run event types."""
@@ -122,7 +124,9 @@ class RunErrorEvent(BaseAgentRunEvent):
     """Event emitted when an agent run encounters an error."""
 
     event: AgentRunEvent = Field(AgentRunEvent.RUN_ERROR, description="Event type")
-    error_type: str | None = Field(default=None, description="Type/category of error")
+    error_type: RunErrorCode = Field(
+        default=RunErrorCode.UNKNOWN, validate_default=True, description="Why the run failed"
+    )
     content: str | None = Field(default=None, description="Error message")
     error_details: dict[str, Any] | None = Field(default=None, description="Additional error details")
 
@@ -163,7 +167,9 @@ class SubagentErrorEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_ERROR, description="Event type")
     message: str = Field(..., description="Error message from the child agent")
-    code: str | None = Field(default=None, description="Framework error type, when it reports one")
+    code: RunErrorCode = Field(
+        default=RunErrorCode.UNKNOWN, validate_default=True, description="Why the delegated run failed"
+    )
 
 
 class ReasoningStartedEvent(BaseAgentRunEvent):

@@ -31,6 +31,7 @@ from digitalkin.models.events.agent_events import (
     ToolCallStartedEvent,
     ToolInfo,
 )
+from digitalkin.models.events.run_error_code import RunErrorCode
 
 __all__ = [
     "AgentRunEvent",
@@ -45,6 +46,7 @@ __all__ = [
     "ReasoningStepEvent",
     "RunCompletedEvent",
     "RunContentEvent",
+    "RunErrorCode",
     "RunErrorEvent",
     "RunStartedEvent",
     "SourceCitation",

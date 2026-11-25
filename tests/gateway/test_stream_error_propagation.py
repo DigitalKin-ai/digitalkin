@@ -384,7 +384,14 @@ class TestValidationErrorPhases:
                 s.ParseFromString(entry["fields"][b"pb"])
                 events.append(json_format.MessageToDict(s)["root"]["event"])
             assert events == (
-                [{"type": "RUN_ERROR", "message": "invalid run input", "code": "INPUT_VALIDATION_ERROR"}]
+                [
+                    {
+                        "type": "RUN_ERROR",
+                        "message": "invalid run input",
+                        "code": "INPUT_INVALID",
+                        "metadata": {"retryable": False},
+                    }
+                ]
                 if agui
                 else []
             )

@@ -31,6 +31,7 @@ from digitalkin.models.events import (
     ReasoningStartedEvent,
     RunCompletedEvent,
     RunContentEvent,
+    RunErrorCode,
     RunStartedEvent,
     SubagentErrorEvent,
     SubagentFinishedEvent,
@@ -332,13 +333,13 @@ class TestSubAgentLabelling:
                 event=AgentRunEvent.SUBAGENT_ERROR,
                 subagent_run_id="m1",
                 message="boom",
-                code="ValueError",
+                code=RunErrorCode.UNKNOWN,
                 timestamp=None,
                 metadata=None,
             ),
         )
         errored = _emitted_event(ctx, AgUiSubagentErrorOutput)
-        assert (errored.subagent_run_id, errored.message, errored.code) == ("m1", "boom", "ValueError")
+        assert (errored.subagent_run_id, errored.message, errored.code) == ("m1", "boom", "UNKNOWN")
 
     @pytest.mark.asyncio
     async def test_attribution_is_forwarded_onto_agui_events(self) -> None:

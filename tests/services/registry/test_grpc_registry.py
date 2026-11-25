@@ -11,8 +11,10 @@ This test suite validates the GrpcRegistry service implementation, including:
 
 import asyncio
 import logging
+import math
 import types
 from concurrent import futures
+from typing import Any
 
 import grpc
 import grpc_testing
@@ -27,6 +29,7 @@ from agentic_mesh_protocol.registry.v1 import (
     registry_service_pb2_grpc,
 )
 from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
+from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.registry.mock_registry_servicer import MockRegistryServicer
@@ -233,10 +236,10 @@ class TestDiscoverById:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_discover_by_id_operation_error(
-            self,
-            client: GrpcRegistry,
-            test_channel: grpc_testing.Channel,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """An OperationError other than NOT_FOUND raises a plain RegistryServiceError."""
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
@@ -502,12 +505,12 @@ class TestSearch:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_search_drops_error_results(
-            self,
-            client: GrpcRegistry,
-            test_channel: grpc_testing.Channel,
-            thread_pool: futures.ThreadPoolExecutor,
-            monkeypatch: pytest.MonkeyPatch,
-            caplog: pytest.LogCaptureFixture,
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A result holding an OperationError is dropped and logged with its content."""
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -920,12 +923,12 @@ class TestSearchSetups:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_search_setups_drops_error_results(
-            self,
-            client: GrpcRegistry,
-            test_channel: grpc_testing.Channel,
-            thread_pool: futures.ThreadPoolExecutor,
-            monkeypatch: pytest.MonkeyPatch,
-            caplog: pytest.LogCaptureFixture,
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A result holding an OperationError is dropped and logged with its content."""
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -1214,3 +1217,86 @@ class TestTagsAndSorting:
         )
 
         assert future.result(timeout=1.0)[0].structure == {}
+
+
+class TestSetupConfig:
+    """The registry hands setup content over as plain Python values."""
+
+    def test_nested_values_are_plain(self) -> None:
+        """Lists and objects inside the content are not left as protobuf containers."""
+        content = {"url": "https://wiki", "items": [{"name": "a", "tags": ["x"]}], "options": {"depth": 2}}
+        config = Struct()
+        config.update(content)
+        descriptor = registry_messages_pb2.SetupDescriptor(id="wiki", name="Wiki", config=config)
+
+        info = GrpcRegistry._proto_to_setup_info(descriptor)
+
+        assert info.config == content
+        assert type(info.config["items"]) is list
+        assert type(info.config["items"][0]) is dict
+
+    def test_matches_message_to_dict_in_values_and_types(self) -> None:
+        """Same values and types as ``MessageToDict``: numbers as floats, nulls and booleans kept.
+
+        Types are compared too: ``2 == 2.0``, so equality alone would miss ints coming back.
+        """
+        config = Struct()
+        config.update({"n": 2, "f": 2.5, "b": True, "z": None, "s": "x", "l": [1, None, {"k": False}]})
+        descriptor = registry_messages_pb2.SetupDescriptor(id="s", name="S", config=config)
+
+        def typed(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {key: typed(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [typed(item) for item in value]
+            return (type(value).__name__, value)
+
+        converted = GrpcRegistry._proto_to_setup_info(descriptor).config
+        assert typed(converted) == typed(json_format.MessageToDict(config))
+        assert type(converted["n"]) is float
+
+    def test_an_empty_config_is_none(self) -> None:
+        descriptor = registry_messages_pb2.SetupDescriptor(id="s", name="S")
+
+        assert GrpcRegistry._proto_to_setup_info(descriptor).config is None
+
+    def test_a_non_finite_number_is_kept_as_dict_did_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``dict()`` kept a NaN or infinity as a float; so does the conversion, and it logs where it sits."""
+        config = Struct()
+        config.update({"ratio": float("nan"), "items": [1, float("inf")], "opts": {"deep": {"x": float("-inf")}}})
+        descriptor = registry_messages_pb2.SetupDescriptor(id="setups:s", name="S", config=config)
+
+        with caplog.at_level(logging.WARNING):
+            info = GrpcRegistry._proto_to_setup_info(descriptor)
+
+        assert math.isnan(info.config["ratio"])
+        assert info.config["items"] == [1.0, math.inf]
+        assert info.config["opts"] == {"deep": {"x": -math.inf}}
+        assert sorted(r.getMessage() for r in caplog.records if "non-finite" in r.getMessage()) == [
+            "Setup setups:s config holds a non-finite number at items[1]: inf",
+            "Setup setups:s config holds a non-finite number at opts.deep.x: -inf",
+            "Setup setups:s config holds a non-finite number at ratio: nan",
+        ]
+
+    def test_finite_numbers_log_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        config = Struct()
+        config.update({"n": 2, "l": [0.5, -3]})
+        descriptor = registry_messages_pb2.SetupDescriptor(id="setups:s", name="S", config=config)
+
+        with caplog.at_level(logging.WARNING):
+            GrpcRegistry._proto_to_setup_info(descriptor)
+
+        assert not [r for r in caplog.records if "non-finite" in r.getMessage()]
+
+    def test_the_nested_config_validate_line_is_logged_once_per_setup(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``get_setup`` runs on every tool resolve, so the marker logs a setup once, not each time."""
+        config = Struct()
+        config.update({"options": {"depth": 2}})
+        descriptor = registry_messages_pb2.SetupDescriptor(id="setups:once", name="S", config=config)
+        GrpcRegistry._nested_config_logged.discard("setups:once")
+
+        with caplog.at_level(logging.INFO):
+            GrpcRegistry._proto_to_setup_info(descriptor)
+            GrpcRegistry._proto_to_setup_info(descriptor)
+
+        assert sum("REGISTRY-PLAIN-CONFIG] setup setups:once" in r.getMessage() for r in caplog.records) == 1

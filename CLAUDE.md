@@ -17,7 +17,7 @@ Evaluate every change against these. They apply while writing new files, not onl
 
 Before writing code, ask: is this the most minimal way to achieve it, and can anything be removed?
 
-`hasattr` / `getattr` / `setattr` are prohibited outright. So are module-level functions and constants. `.claude/hooks/guard-edit.sh` blocks all three at the tool boundary.
+`hasattr` / `getattr` / `setattr` are prohibited outright. So are module-level functions and constants.
 
 ## Commands
 
@@ -42,7 +42,7 @@ Tests need the docker compose stack (Redis). `uv run pytest` alone will skip or 
 - Audit and plan before modifying code. State the plan, then execute it.
 - Ask before editing outside the agreed scope, including in auto mode.
 - Never edit version strings. `task bump-version` is the user's call alone; `__version__.py` and `.bumpversion.toml` are deny-listed.
-- Do not run `git` in the main session — it is blocked by hook. Read files for baseline checks. Review subagents may read git for diffs.
+- Commit or push only when the user asks.
 - A behavior-changing bug fix emits a `[VALIDATE <id>]` log plus a `# TODO(validate)` comment. Sweep them with `rg "TODO\(validate\)"` after production validation.
 - When dropping or filtering data, log every dropped item with its content, not an aggregate count.
 

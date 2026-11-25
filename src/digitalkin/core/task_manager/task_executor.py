@@ -62,14 +62,11 @@ class TaskExecutor:
         started = False
 
         async def _cancelled() -> None:
-            action = session.pending_signal_action
+            reason = session.cancel_cause()
             session.pending_signal_action = ""
-            if action == "stop":
-                await session._handle_cancel(CancellationReason.SIGNAL_SERVICE_STOP)  # ruff: ignore[private-member-access]
-                return
-            if session.cancellation_reason == CancellationReason.UNKNOWN:
-                session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-            await session._handle_cancel(session.cancellation_reason)  # ruff: ignore[private-member-access]
+            if reason == CancellationReason.UNKNOWN:
+                reason = CancellationReason.SIGNAL_SERVICE_CANCEL
+            await session._handle_cancel(reason)  # ruff: ignore[private-member-access]
 
         async def _finalize() -> None:
             if on_finalize is None:

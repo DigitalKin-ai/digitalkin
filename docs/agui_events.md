@@ -40,7 +40,7 @@ Each frame is the `data` Struct of one `StreamClient`:
 | Path | Values | Changes when |
 |---|---|---|
 | `run.status` | `running` → `completed` \| `failed` \| `cancelled` \| `interrupted` | `RUN_FINISHED`, `RUN_ERROR`, cancel, HITL pause |
-| `run.error` | message | the run fails or is cancelled |
+| `run.error` | message | the run fails |
 | `run.heartbeatAt` | epoch ms | every `DIGITALKIN_MODULE_HEARTBEAT_INTERVAL_S` (30s) of silence while the run is open |
 | `tools.<id>.status` | `running` → `completed` \| `failed` \| `awaiting_input` | tool start, end, failure, HITL pause |
 | `tools.<id>.error` | `[CODE] message` or the tool's error JSON | the tool failed |
@@ -56,12 +56,12 @@ Elapsed time is `now − startedAt`; `heartbeatAt` proves the task is alive whil
 | `agui_run_started` | RUN_STARTED | A run begins, including the resume after a pause | Open the run, show "working" |
 | `agui_state_snapshot` | STATE_SNAPSHOT | Right after RUN_STARTED | Replace local state |
 | `agui_state_delta` | STATE_DELTA | Any status change above, and the heartbeat | Apply the patch, re-render the pipeline |
-| `agui_run_finished` | RUN_FINISHED | The run completed **or** paused for a human | `outcome.type == "interrupt"`: show each `outcome.interrupts[i].message` and wait for the user. Otherwise: close the run. Legacy clients read `result.status == "awaiting_tool_result"` |
-| `agui_run_error` | RUN_ERROR | The run ended badly | Close the run. `code == "cancelled"`: neutral "stopped". Anything else: error |
+| `agui_run_finished` | RUN_FINISHED | The run completed, paused for a human, **or** was stopped by the user | `outcome.type == "interrupt"`: show each `outcome.interrupts[i].message` and wait for the user. `outcome.type == "cancelled"`: neutral "stopped", keep the partial answer. Otherwise: close the run. Legacy clients read `result.status == "awaiting_tool_result"`. `usage`: the run's tokens per provider and model |
+| `agui_run_error` | RUN_ERROR | The run failed | Close the run as an error. `metadata.retryable == true`: offer a retry |
 
-`RUN_ERROR.code` values: the agent's error type (from agno), `module_error` (the module raised; `message` is always `module execution failed`, the detail stays in the server log), `permission_denied`, `cancelled`, `partial_tool_results` (resume without every pending tool result), `auto_continue_limit`, `INPUT_VALIDATION_ERROR` (the run input failed validation; a retired `binary` part is upgraded first when the kin uses `AgUiStreamInput`; sent as the first event, before `stream.error`).
+`RUN_ERROR.code` values are the `RunErrorCode` members listed with their `retryable` hint in [`gateway_protocol.md`](gateway_protocol.md#run_error-codes). `MODULE_FAILED`: the module raised; `message` is always `module execution failed`, the detail stays in the server log. `INPUT_INVALID`: the run input failed validation (a retired `binary` part is upgraded first when the kin uses `AgUiStreamInput`); sent as the first event, before `stream.error`. `RUN_INTERRUPTED`: the platform cancelled the task (shutdown, timeout, service failure).
 
-A tool call, text or reasoning message still open when the run completes is closed before `RUN_FINISHED`; an unfinished tool call closes as a failure (`TOOL_CALL_RESULT {"error": "tool call did not complete before its run ended"}`). After `RUN_ERROR` nothing is closed: per AG-UI 1.0 the front treats every open message, tool call and subagent as abandoned.
+A tool call, text or reasoning message still open when the run completes is closed before `RUN_FINISHED`; an unfinished tool call closes as a failure (`TOOL_CALL_RESULT {"error": "tool call did not complete before its run ended"}`). A user stop closes them the same way before its cancelled `RUN_FINISHED` (`{"error": "run cancelled"}`; running subagents end on `SUBAGENT_ERROR` `RUN_CANCELLED`). After `RUN_ERROR` nothing is closed: per AG-UI 1.0 the front treats every open message, tool call and subagent as abandoned.
 
 ## Text and reasoning
 
@@ -194,7 +194,7 @@ The 1.x client's compatibility shims for 0.x producers expire on the dates liste
 | `stream.heartbeat` | Task alive but silent, with no AG-UI run open | Ignore |
 | `stream.warn` | Recoverable issue | Optional notice |
 | `stream.error` | `code`, `message`, `fatal` | Fatal without a prior `RUN_ERROR`: treat as a run error |
-| `stream.cancelled` | Task cancelled (`reason`) | Arrives after `RUN_ERROR code=cancelled` |
+| `stream.cancelled` | Task cancelled (`reason`: `signal_service_cancel`, `signal_service_stop`, `shutdown`, `timeout`, …) | Arrives after the cancelled `RUN_FINISHED` or the `RUN_ERROR RUN_INTERRUPTED` |
 | `stream.end` | Always the last frame | Close the stream |
 
 See [`gateway_protocol.md`](gateway_protocol.md) for the sentinel rules.
@@ -206,8 +206,9 @@ See [`gateway_protocol.md`](gateway_protocol.md) for the sentinel rules.
 | A tool fails | `TOOL_CALL_END`, `TOOL_CALL_RESULT {"error"}`, delta `tools.<id>.status = failed`; the run continues |
 | A tool or the model runs long | delta `run.heartbeatAt` every 30s of silence |
 | The agent reports an error | delta `run.status = failed`, `RUN_ERROR`, `stream.end` |
-| The module raises | `RUN_ERROR code=module_error` (if a run is open), `stream.end` immediately |
-| The user cancels | delta `run.status = cancelled`, `RUN_ERROR code=cancelled`, `stream.cancelled`, `stream.end` |
+| The module raises | `RUN_ERROR code=MODULE_FAILED` (if a run is open), `stream.end` immediately |
+| The user cancels | open messages, tool calls and subagents closed, delta `run.status = cancelled`, `RUN_FINISHED outcome.type = cancelled`, `stream.cancelled`, `stream.end` |
+| The platform cancels (shutdown, timeout) | delta `run.status = failed`, `RUN_ERROR code=RUN_INTERRUPTED metadata.retryable=true`, `stream.cancelled`, `stream.end` |
 | The process dies | no heartbeat → after `DIGITALKIN_GATEWAY_STREAM_READ_IDLE_TIMEOUT_S` (300s): `stream.error STREAM_IDLE_TIMEOUT`, `stream.end` |
 | Waiting on the human | open subagents `SUBAGENT_FINISHED outcome=suspended`, `RUN_FINISHED outcome.type = interrupt` |
-| The run input is invalid | `RUN_ERROR code=INPUT_VALIDATION_ERROR`, `stream.error INPUT_VALIDATION_ERROR`, `stream.end` |
+| The run input is invalid | `RUN_ERROR code=INPUT_INVALID`, `stream.error INPUT_VALIDATION_ERROR`, `stream.end` |

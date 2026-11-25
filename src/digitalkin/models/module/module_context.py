@@ -565,8 +565,11 @@ class ModuleContext:
         """Close owned service strategies and release their resources.
 
         Borrowed strategies (shared singletons) are skipped — they are
-        closed at server shutdown, not per-request.
+        closed at server shutdown, not per-request. An AG-UI run left open stops counting usage.
         """
+        if self.agui_run is not None and self.agui_run.open:
+            logger.warning("AG-UI run still open at cleanup; closing it without a terminal event")
+            self.agui_run.close()
         owned = (
             ("task_manager", self.task_manager),
             ("communication", self.communication),

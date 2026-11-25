@@ -123,7 +123,43 @@ Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `to
 
 **Invariant:** every stream ends with exactly one `stream.end`. Fatal errors are *two* writes — `stream.error(fatal=true)` then `stream.end` — because the diagnostic event and the structural terminator have separate jobs.
 
-`code` values follow gRPC status names: `INVALID_ARGUMENT`, `NOT_FOUND`, `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, …
+`stream.error` `code` values come from `StreamErrorCode` (`models/grpc_servers/stream_error_codes.py`): `DIAL_BACK_UNREACHABLE`, `STREAM_IDLE_TIMEOUT`, `REDIS_UNAVAILABLE`, `MODULE_RUNTIME_ERROR`, `INPUT_VALIDATION_ERROR`, …
+
+---
+
+## RUN_ERROR codes
+
+An AG-UI `RUN_ERROR` (and `SUBAGENT_ERROR`) carries `code` from `RunErrorCode` (`models/events/run_error_code.py`). Consumers switch on `code` only; `message` is technical text. `RUN_ERROR.metadata.retryable` is a hint (in `metadata` because `RunErrorEvent` is a closed object in AG-UI 1.0): `true` when a new attempt started later can succeed, `false` when the same request fails again, omitted when the SDK cannot tell. It is set after the SDK's own retries (proxy, litellm client, stream resend) are spent, so it never means "retry now". Values are append-only.
+
+A run the user stops (`SendSignal(CANCEL)` or `STOP`) did not fail: it ends on `RUN_FINISHED` with `outcome: {type: "cancelled"}`, after the SDK closes what the run left open (text and reasoning messages, tool calls with an `{"error": "run cancelled"}` result, subagents with `SUBAGENT_ERROR` `RUN_CANCELLED`). A cancel the user did not ask for (server shutdown, timeout, a failed service, an unknown cause) ends on `RUN_ERROR` `RUN_INTERRUPTED`. Both are followed by `stream.cancelled` carrying the cause, then `stream.end`.
+
+`RUN_FINISHED.usage` and `RUN_ERROR.usage` carry the run's token counts, one AG-UI `TokenUsage` per provider and model, from the LLM calls its task made while the run was open (a call made after it closed, such as a session summary, belongs to no run); absent when none reported usage.
+
+| `code` | Emitted when | `retryable` | Source |
+|---|---|---|---|
+| `MODEL_CONTENT_FILTERED` | The provider stopped on `finish_reason: content_filter` (Claude refusal, Gemini safety/recitation, Bedrock guardrail, Azure moderation), or rejected the request on content policy | `false` | `SafeLiteLLM` |
+| `MODEL_CONTEXT_LENGTH_EXCEEDED` | The prompt is still too long after compaction | `false` | `SafeLiteLLM`, agno `model_provider_error` worded as an overflow |
+| `MODEL_BUDGET_EXCEEDED` | 402, or a proxy budget is spent | `false` | `SafeLiteLLM` |
+| `MODEL_REQUEST_INVALID` | 400 / 422 | `false` | `SafeLiteLLM`, agno `model_provider_error` worded as an invalid request |
+| `MODEL_AUTHENTICATION_FAILED` | 401 | `false` | `SafeLiteLLM`, agno `model_authentication_error` |
+| `MODEL_PERMISSION_DENIED` | 403 | `false` | `SafeLiteLLM`, agno `model_provider_error` worded as a permission error |
+| `MODEL_NOT_FOUND` | 404, unknown model | `false` | `SafeLiteLLM`, agno `model_provider_error` worded as not found |
+| `MODEL_RATE_LIMITED` | 429 | `true` | `SafeLiteLLM`, agno `model_provider_error` worded as a rate limit |
+| `MODEL_OVERLOADED` | The provider reports an overload (529). litellm turns a 529 into a 500, so the error text containing "overloaded" decides | `true` | `SafeLiteLLM`, agno `model_provider_error` worded as an overload |
+| `MODEL_TIMEOUT` | Request timeout | `true` | `SafeLiteLLM`, agno `model_provider_error` worded as a timeout |
+| `MODEL_STREAM_INTERRUPTED` | The stream dropped after it started | `true` | `SafeLiteLLM` |
+| `MODEL_UNAVAILABLE` | 5xx, connection failure | `true` | `SafeLiteLLM`, agno `model_provider_error` worded as an outage |
+| `INPUT_INVALID` | The run input failed validation | `false` | `ModuleRunner` |
+| `INPUT_REJECTED` | An agno input guardrail refused the input | `false` | agno `input_check_error` |
+| `OUTPUT_REJECTED` | An agno output guardrail refused the output | `false` | agno `output_check_error` |
+| `TOOL_RESULTS_PARTIAL` | A HITL resume lacked some pending tool results | `true` | `AgnoHitlRunner` |
+| `AUTO_CONTINUE_LIMIT` | The HITL in-process auto-continue cap was reached | `true` | `AgnoHitlRunner` |
+| `RUN_CANCELLED` | A subagent cut short by a user stop (`SUBAGENT_ERROR`); never on `RUN_ERROR`: agno's `run_cancelled_error` ends the run as `RUN_FINISHED` cancelled | `false` | `AgUiRunState.cancel`, agno `run_cancelled_error` |
+| `PERMISSION_DENIED` | A platform service refused the module | `false` | `BaseModule` |
+| `MODULE_FAILED` | The module raised while running | — | `BaseModule` |
+| `MODULE_INIT_FAILED` | The module raised while initializing (sent as `ModuleCodeModel.code`; on the dial-back path the run ends on `stream.error` instead) | — | `BaseModule` |
+| `UNKNOWN` | Any other failure (logged as `[VALIDATE RUN-ERROR-CODE-UNMAPPED]` with its type and text), and an agno `model_provider_error` whose wording names no cause | — | `AgnoAdapter` |
+| `RUN_INTERRUPTED` | The task was cancelled by the platform, not the user: shutdown, timeout, a failed service, an unknown cause (`message` = `run interrupted (<cause>)`) | `true` | `BaseModule` |
 
 ---
 

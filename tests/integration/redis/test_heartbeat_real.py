@@ -125,9 +125,9 @@ async def test_crash_writes_run_error_then_eos(redis_client: RedisClient) -> Non
         if b"pb" in fields
     ]
     assert [d.get("root", {}).get("protocol", d.get("code")) for d in data] == [
-        "Error",
+        "MODULE_FAILED",
         "agui_state_delta",
         "agui_run_error",
     ]
-    assert data[-1]["root"]["event"]["code"] == "module_error"
+    assert data[-1]["root"]["event"]["code"] == "MODULE_FAILED"
     assert entries[-1][1] == {b"eos": b"true"}

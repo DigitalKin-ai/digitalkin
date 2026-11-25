@@ -5,8 +5,9 @@ pydantic model raises ``AttributeError``: ``_book`` must read token categories s
 (e.g. ``cache_creation_tokens`` on older builds) yields 0 instead of crashing the callback.
 """
 
-from collections.abc import Iterator
 import logging
+from collections.abc import Iterator
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +26,8 @@ from digitalkin.community.litellm import (
     LiteLLMRegistry,
     ModelParser,
 )
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
+from digitalkin.mixins.agui_mixin import AgUiRunState
 
 
 class FakeCost:
@@ -119,7 +122,7 @@ class TestBook:
             ),
         )
         usage = SimpleNamespace(
-            prompt_tokens=0,
+            prompt_tokens=8,
             completion_tokens=0,
             prompt_tokens_details={"cache_creation_tokens": 8},
             completion_tokens_details=None,
@@ -128,6 +131,38 @@ class TestBook:
         await CostTrackingLogger._book(usage, spec, cost, Decimal(2), "m")  # type: ignore[arg-type]
 
         assert cost.calls == [("llm_cache_creation_tokens", "chatbot_cache_creation_input", 8 * 1.25 / 20_000 * 2)]
+
+    async def test_a_cache_write_is_billed_once(self):
+        """litellm's ``prompt_tokens`` counts cache writes and reads: each token is billed in one category only.
+
+        Numbers of a first Claude turn seen on magicbox: 15,421 tokens written to the cache, 4 left
+        uncached, nothing read.
+        """
+        cost = FakeCost()
+        spec = SimpleNamespace(
+            name="claude",
+            costs=CostInfo(
+                input_cost_per_token=Decimal(1),
+                output_cost_per_token=Decimal(1),
+                cache_read_input_token_cost=Decimal("0.1"),
+                cache_creation_input_token_cost=Decimal("1.25"),
+            ),
+        )
+        usage = Usage(
+            prompt_tokens=15_425 + 600,
+            completion_tokens=4,
+            total_tokens=16_029,
+            prompt_tokens_details={"cached_tokens": 600, "cache_creation_tokens": 15_421},
+        )
+
+        await CostTrackingLogger._book(usage, spec, cost, Decimal(1), "m")  # type: ignore[arg-type]
+
+        assert {name: amount for name, _, amount in cost.calls} == {
+            "llm_input_tokens": pytest.approx(4 / 20_000),
+            "llm_output_tokens": pytest.approx(4 / 20_000),
+            "llm_cached_tokens": pytest.approx(600 * 0.1 / 20_000),
+            "llm_cache_creation_tokens": pytest.approx(15_421 * 1.25 / 20_000),
+        }
 
 
 class TestCredit:
@@ -273,6 +308,77 @@ class TestSuccessEvent:
         await CostTrackingLogger().async_log_success_event(
             self._call({CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"}), self._response(), None, None
         )
+
+
+class TestRunUsage:
+    @pytest.fixture(autouse=True)
+    def _registry(self) -> Iterator[None]:
+        registry = LiteLLMRegistry(LiteLLMConfig(base_url="http://proxy", bearer_token="t"))
+        spec = ModelParser({
+            "model_name": "claude",
+            "litellm_params": {"model": "anthropic/claude-x"},
+            "model_info": {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        }).to_model_spec()
+        registry._models[spec.name] = spec
+        LiteLLMRegistry._shared = registry
+        yield
+        LiteLLMRegistry._shared = None
+
+    def test_token_usage_keeps_litellm_totals_and_their_parts(self):
+        usage = Usage(
+            prompt_tokens=1_000,
+            completion_tokens=300,
+            total_tokens=1_300,
+            prompt_tokens_details={"cached_tokens": 600, "cache_creation_tokens": 100},
+            completion_tokens_details={"reasoning_tokens": 200},
+        )
+
+        token_usage = CostTrackingLogger.token_usage(usage, "claude", LiteLLMRegistry.shared().try_get("claude"))
+
+        assert token_usage.model_dump(by_alias=True, exclude_none=True) == {
+            "provider": "Anthropic",
+            "model": "claude",
+            "inputTokens": 1_000,
+            "outputTokens": 300,
+            "totalTokens": 1_300,
+            "reasoningTokens": 200,
+            "cachedInputTokens": 600,
+            "cacheWriteInputTokens": 100,
+        }
+
+    async def test_a_call_counts_toward_its_tasks_open_run_even_unbilled(self):
+        run = AgUiRunState("t", "r", "task-usage")
+        response = ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14))
+        token = RequestContext.bind(task_id="task-usage", mission_id="mission-usage")
+        try:
+            await CostTrackingLogger().async_log_success_event(
+                {"model": "litellm_proxy/claude", "litellm_params": {"metadata": {"dk_mission_id": "mission-usage"}}},
+                response,
+                datetime.now(),
+                None,
+            )
+        finally:
+            RequestContext.reset(token)
+
+        assert [(u.model, u.input_tokens, u.output_tokens) for u in run.close() or []] == [("claude", 10, 4)]
+
+    async def test_a_usage_failure_still_bills_the_call(self, mission: FakeCost, monkeypatch: pytest.MonkeyPatch):
+        def boom(*_: Any) -> None:
+            raise ValueError("odd count")
+
+        monkeypatch.setattr(AgUiRunState, "record_usage", boom)
+        token = RequestContext.bind(task_id="task-billed")
+        try:
+            await CostTrackingLogger().async_log_success_event(
+                {"model": "litellm_proxy/claude", "litellm_params": {"metadata": {"dk_mission_id": "mission-1"}}},
+                ModelResponse(usage=Usage(prompt_tokens=20_000, completion_tokens=0, total_tokens=20_000)),
+                datetime.now(),
+                None,
+            )
+        finally:
+            RequestContext.reset(token)
+
+        assert [name for name, _, _ in mission.calls] == ["llm_input_tokens"]
 
 
 class TestCostConfig:

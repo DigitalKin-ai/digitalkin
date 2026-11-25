@@ -5,11 +5,13 @@ import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar, Generic
+from typing import TYPE_CHECKING, Any, ClassVar, Generic
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.utils.utility_schema_extender import UtilitySchemaExtender
 from digitalkin.logger import logger
+from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.events import RunErrorCode
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
@@ -29,6 +31,9 @@ from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
+
+if TYPE_CHECKING:
+    from digitalkin.core.task_manager.task_session import TaskSession
 
 # Pre-built generic; avoids regenerating one per start()/stop().
 _EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
@@ -148,6 +153,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         self._prepared: bool = False
         # Set on the first stop() so it runs once, whatever the status (FAILED still needs stream.end).
         self._stopped: bool = False
+        # Set by the TaskSession that runs this module; stop() reads the cancel cause from it.
+        self.task_session: TaskSession | None = None
 
         self.context = ModuleContext(
             **self._init_strategies(mission_id, setup_id, setup_version_id),
@@ -629,7 +636,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             logger.warning("Permission denied in module %s: %s", self.name, e, extra=self.context.session.current_ids())
             await self._notify_permission_denied(self.context.callbacks.send_message, e)
             if self.context.agui_run is not None:
-                await self.context.agui_run.fail(self.context, "failed", str(e), "permission_denied")
+                await self.context.agui_run.fail(self.context, str(e), RunErrorCode.PERMISSION_DENIED)
         except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
@@ -641,7 +648,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             try:
                 await self.context.callbacks.send_message(
                     ModuleCodeModel(
-                        code="Error",
+                        code=RunErrorCode.MODULE_FAILED,
                         short_description="Module execution failed",
                         message=str(e),
                     )
@@ -652,7 +659,9 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                         type(e).__name__,
                         extra=self.context.session.current_ids(),
                     )
-                    await self.context.agui_run.fail(self.context, "failed", "module execution failed", "module_error")
+                    await self.context.agui_run.fail(
+                        self.context, "module execution failed", RunErrorCode.MODULE_FAILED
+                    )
             except Exception:
                 logger.exception("Failed to send error callback", extra=self.context.session.current_ids())
         else:
@@ -672,7 +681,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         try:
             await callback(
                 ModuleCodeModel(
-                    code="PermissionDenied",
+                    code=RunErrorCode.PERMISSION_DENIED,
                     short_description="Permission denied",
                     message=str(e),
                 )
@@ -761,7 +770,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             logger.exception("%s: %s", short_description, error_detail, extra=self.context.session.current_ids())
             await callback(
                 ModuleCodeModel(
-                    code="Error",
+                    code=RunErrorCode.MODULE_INIT_FAILED,
                     short_description=short_description,
                     message=error_detail,
                 )
@@ -784,11 +793,14 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
     async def stop(self, cancel_reason: str | None = None) -> None:  # ruff: ignore[complex-structure]
         """Stop the module. Idempotent — second call is a no-op.
 
-        A cancelled module (status ``CANCELLED`` or a ``cancel_reason`` given) emits
-        ``stream.cancelled`` right before ``stream.end``.
+        A cancelled module (status ``CANCELLED`` or a ``cancel_reason`` given) closes its AG-UI run,
+        then emits ``stream.cancelled`` right before ``stream.end``. A user's cancel or stop signal
+        ends the run as ``RUN_FINISHED`` cancelled; any other cause (shutdown, timeout, unknown)
+        as a retryable ``RUN_ERROR`` ``RUN_INTERRUPTED``.
 
         Args:
-            cancel_reason: Cancellation reason carried by ``stream.cancelled``.
+            cancel_reason: Cancellation reason carried by ``stream.cancelled``; read from the task
+                session when the module was cancelled without one.
         """
         t0 = time.perf_counter_ns()
         if self._stopped:
@@ -796,7 +808,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         self._stopped = True
         failed = self._status == ModuleStatus.FAILED
         if cancel_reason is None and self._status == ModuleStatus.CANCELLED:
-            cancel_reason = "cancelled"
+            cause = self.task_session.cancel_cause() if self.task_session is not None else CancellationReason.UNKNOWN
+            cancel_reason = cause.value
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPING
             await self.cleanup()
@@ -821,8 +834,19 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
             if "send_message" in vars(self.context.callbacks):
                 if cancel_reason is not None:
-                    if self.context.agui_run is not None:
-                        await self.context.agui_run.fail(self.context, "cancelled", cancel_reason, "cancelled")
+                    run = self.context.agui_run
+                    user_cancel = cancel_reason in {
+                        CancellationReason.SIGNAL_SERVICE_CANCEL.value,
+                        CancellationReason.SIGNAL_SERVICE_STOP.value,
+                    }
+                    if run is not None and user_cancel:
+                        await run.cancel(self.context, cancel_reason)
+                    elif run is not None:
+                        await run.fail(
+                            self.context,
+                            f"run interrupted ({cancel_reason})",
+                            RunErrorCode.RUN_INTERRUPTED,
+                        )
                     logger.info(
                         "emitting stream.cancelled reason=%s before stream.end",
                         cancel_reason,

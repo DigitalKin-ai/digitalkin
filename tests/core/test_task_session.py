@@ -42,12 +42,14 @@ async def mock_module(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     module.context.session = Mock()
     module.context.session.setup_id = "setup:test"
     module.context.session.setup_version_id = "setup_version:test"
-    module.context.session.current_ids = Mock(return_value={
-        "mission_id": "missions:test",
-        "task_id": "test",
-        "setup_id": "setup:test",
-        "setup_version_id": "setup_version:test",
-    })
+    module.context.session.current_ids = Mock(
+        return_value={
+            "mission_id": "missions:test",
+            "task_id": "test",
+            "setup_id": "setup:test",
+            "setup_version_id": "setup_version:test",
+        }
+    )
     module.context.task_manager = mock_signal_service
     module.context.cleanup = AsyncMock()
     return module
@@ -83,7 +85,9 @@ class TestInitialization:
         assert task_session._cleanup_done is False
 
     def test_signal_service_from_module_context(
-        self, task_session: TaskSession, mock_signal_service: Mock,
+        self,
+        task_session: TaskSession,
+        mock_signal_service: Mock,
     ) -> None:
         """Test that signal_service is derived from module.context.task_manager."""
         assert task_session.signal_service is mock_signal_service
@@ -164,6 +168,33 @@ class TestCancellation:
         await task_session._handle_cancel(CancellationReason.SUCCESS_CLEANUP)
         assert task_session.cancellation_reason == CancellationReason.SUCCESS_CLEANUP
 
+    @pytest.mark.parametrize(
+        ("action", "reason", "expected"),
+        [
+            ("stop", CancellationReason.SHUTDOWN, CancellationReason.SIGNAL_SERVICE_STOP),
+            ("cancel", CancellationReason.SHUTDOWN, CancellationReason.SHUTDOWN),
+            ("cancel", CancellationReason.TIMEOUT, CancellationReason.TIMEOUT),
+            ("cancel", CancellationReason.UNKNOWN, CancellationReason.SIGNAL_SERVICE_CANCEL),
+            ("", CancellationReason.COMPLETED, CancellationReason.UNKNOWN),
+            ("", CancellationReason.UNKNOWN, CancellationReason.UNKNOWN),
+        ],
+    )
+    def test_cancel_cause_while_the_task_unwinds(
+        self,
+        task_session: TaskSession,
+        action: str,
+        reason: CancellationReason,
+        expected: CancellationReason,
+    ) -> None:
+        """The module stops before the executor records the reason: the cause reads the same inputs."""
+        task_session.pending_signal_action = action
+        task_session.cancellation_reason = reason
+
+        assert task_session.cancel_cause() == expected
+
+    def test_session_registers_itself_on_its_module(self, task_session: TaskSession, mock_module: Mock) -> None:
+        assert mock_module.task_session is task_session
+
 
 # ============================================================================
 # Test: Stream Control
@@ -243,7 +274,9 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_calls_module_context_cleanup(
-        self, task_session: TaskSession, mock_module: Mock,
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
     ) -> None:
         """Test cleanup calls module.context.cleanup()."""
         await task_session.cleanup()
@@ -251,7 +284,9 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_stops_module(
-        self, task_session: TaskSession, mock_module: Mock,
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
     ) -> None:
         """Test cleanup stops the module."""
         await task_session.cleanup()
@@ -259,7 +294,8 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_nullifies_module_reference(
-        self, task_session: TaskSession,
+        self,
+        task_session: TaskSession,
     ) -> None:
         """Test cleanup sets module to None for GC."""
         await task_session.cleanup()
@@ -267,7 +303,9 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_handles_context_cleanup_failure(
-        self, task_session: TaskSession, mock_module: Mock,
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
     ) -> None:
         """Test cleanup continues even if context cleanup fails."""
         mock_module.context.cleanup = AsyncMock(side_effect=RuntimeError("cleanup boom"))
@@ -280,7 +318,9 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_handles_module_stop_failure(
-        self, task_session: TaskSession, mock_module: Mock,
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
     ) -> None:
         """Test cleanup continues even if module.stop() fails."""
         mock_module.stop = AsyncMock(side_effect=RuntimeError("stop boom"))
@@ -372,12 +412,14 @@ async def mock_module_no_task_manager() -> Mock:  # noqa: RUF029
     module.context.session = Mock()
     module.context.session.setup_id = "setup:cfg"
     module.context.session.setup_version_id = "setup_version:cfg"
-    module.context.session.current_ids = Mock(return_value={
-        "mission_id": "missions:test",
-        "task_id": "cfg_task",
-        "setup_id": "setup:cfg",
-        "setup_version_id": "setup_version:cfg",
-    })
+    module.context.session.current_ids = Mock(
+        return_value={
+            "mission_id": "missions:test",
+            "task_id": "cfg_task",
+            "setup_id": "setup:cfg",
+            "setup_version_id": "setup_version:cfg",
+        }
+    )
     module.context.task_manager = None
     module.context.cleanup = AsyncMock()
     return module
@@ -407,6 +449,7 @@ class TestTaskSessionNoTaskManager:
 
     async def test_base_task_manager_send_signal_returns_false(self, mock_module_no_task_manager: Mock) -> None:
         from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
+
         mgr = LocalTaskManager()
         session = TaskSession(
             task_id="cfg_task",

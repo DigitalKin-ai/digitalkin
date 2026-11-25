@@ -6,7 +6,7 @@ paths:
 # DigitalKin Python rules
 
 ## Prohibited
-- `hasattr()` / `getattr()` / `setattr()`. Their presence means the type design is wrong. Use `is None` / `is not None` or a correct annotation. Blocked by `.claude/hooks/guard-edit.sh`.
+- `hasattr()` / `getattr()` / `setattr()`. Their presence means the type design is wrong. Use `is None` / `is not None` or a correct annotation.
 - Module-level functions. Every function is a method on a class.
 - Module-level constants or variables. Inline a default at its single use site alongside the env var: `os.environ.get("VAR", "default")`.
 - `ClassVar` for a value used once.

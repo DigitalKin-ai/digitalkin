@@ -136,6 +136,28 @@ class TestHandleAgUiInput:
         assert (kwargs["run_id"], kwargs["agui_tools"]) == ("r1", [])
 
 
+class TestPartialToolResults:
+    async def test_partial_results_end_the_run_with_tool_results_partial(self) -> None:
+        """A resume missing one of the pending tool results ends on RUN_ERROR and keeps the pause."""
+        from digitalkin.models.events import AgentRunEvent, RunErrorCode
+
+        record = PausedRunRecord(thread_id="t1", run_id="agno-r", pending_tool_call_ids=["c1", "c2"])
+        store = SimpleNamespace(load=AsyncMock(return_value=record), delete=AsyncMock())
+        runner = AgnoHitlRunner(agent=SimpleNamespace(), store=store)
+        runner.continue_paused_run = AsyncMock()  # type: ignore[method-assign]
+        send = AsyncMock()
+
+        resumed = await runner.try_resume(_input(ToolMessage(id="tm1", tool_call_id="c1", content="ok")), send=send)
+
+        events = [call.args[0] for call in send.await_args_list]
+        assert resumed == (True, None)
+        assert [e.event for e in events] == [AgentRunEvent.RUN_STARTED, AgentRunEvent.RUN_ERROR]
+        assert events[1].error_type == RunErrorCode.TOOL_RESULTS_PARTIAL
+        assert "missing ['c2']" in events[1].content
+        runner.continue_paused_run.assert_not_awaited()
+        store.delete.assert_not_awaited()
+
+
 class TestAgnoMessagesToAgUi:
     def test_list_content_becomes_text_not_repr(self) -> None:
         messages = [

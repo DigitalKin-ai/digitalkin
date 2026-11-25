@@ -307,8 +307,9 @@ class HitlEvents:
             )
             for tool_call_id in pending_tool_call_ids
         ]
+        usage = None
         if run is not None and run.open:
-            run.open = False
+            usage = run.close()
             await run.update(
                 context,
                 *((("tools", tid, "status"), "awaiting_input") for tid in pending_tool_call_ids if tid in tools),
@@ -321,6 +322,7 @@ class HitlEvents:
                     thread_id=thread_id,
                     run_id=run_id,
                     outcome=RunFinishedInterruptOutcome(interrupts=interrupts) if interrupts else None,
+                    usage=usage,
                     result={
                         "status": _AWAITING_STATUS,
                         "pending_tool_call_ids": pending_tool_call_ids,
@@ -632,7 +634,7 @@ class AgnoHitlRunner:
         # and keep the record so the client can retry.
         missing = pending - set(tool_results.keys())
         if missing:
-            from digitalkin.models.events import AgentRunEvent, RunErrorEvent, RunStartedEvent
+            from digitalkin.models.events import AgentRunEvent, RunErrorCode, RunErrorEvent, RunStartedEvent
 
             input_run_id = input_data.run_id
             logger.warning(
@@ -654,7 +656,7 @@ class AgnoHitlRunner:
             await send(
                 RunErrorEvent(
                     event=AgentRunEvent.RUN_ERROR,
-                    error_type="partial_tool_results",
+                    error_type=RunErrorCode.TOOL_RESULTS_PARTIAL,
                     content=(
                         f"Partial tool results: {len(tool_results)}/{len(pending)} "
                         f"resolved, missing {sorted(missing)}. The agent is paused on "
@@ -872,12 +874,12 @@ class AgnoHitlRunner:
                 return pause_info
 
             logger.warning("AgnoHitlRunner: auto-continue limit reached for thread_id=%s", thread_id)
-            from digitalkin.models.events import AgentRunEvent, RunErrorEvent
+            from digitalkin.models.events import AgentRunEvent, RunErrorCode, RunErrorEvent
 
             await send(
                 RunErrorEvent(
                     event=AgentRunEvent.RUN_ERROR,
-                    error_type="auto_continue_limit",
+                    error_type=RunErrorCode.AUTO_CONTINUE_LIMIT,
                     content=(
                         "The run was stopped after too many consecutive in-process tool "
                         "loads (load_manager). Send a new message to continue."

@@ -158,7 +158,7 @@ class TestCancelPathsReal:
                     await asyncio.sleep(0.05)
 
             assert await _stream_protocols(redis_client, "rc_mid") == [
-                ("stream.cancelled", "cancelled"),
+                ("stream.cancelled", "signal_service_cancel"),
                 ("<eos>", ""),
             ]
             assert "rc_mid" not in jm.tasks_sessions

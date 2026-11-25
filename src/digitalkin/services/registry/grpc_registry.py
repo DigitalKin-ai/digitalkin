@@ -4,8 +4,9 @@ This module provides a gRPC-based registry client that communicates with
 the Service Provider's Registry service.
 """
 
+import math
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 import grpc
 from agentic_mesh_protocol.common.v1 import common_enums_pb2
@@ -17,7 +18,7 @@ from agentic_mesh_protocol.registry.v1 import (
     registry_service_pb2_grpc,
 )
 from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
-from google.protobuf import json_format
+from google.protobuf import json_format, struct_pb2
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
@@ -52,6 +53,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     """
 
     service_name: str = "RegistryService"
+
+    # Setups whose nested-config VALIDATE line was already logged: get_setup runs on every tool resolve.
+    _nested_config_logged: ClassVar[set[str]] = set()
 
     def __init__(
         self,
@@ -122,6 +126,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """Convert proto SetupDescriptor to SetupInfo.
 
         The descriptor no longer carries a ``module_id``: it is read from the resolved ``module``.
+        ``config`` is converted at every level: ``dict()`` only converted the top level and left
+        nested lists and objects as ``ListValue`` / ``Struct`` containers.
 
         Args:
             descriptor: Proto SetupDescriptor message.
@@ -131,6 +137,15 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """
         status_name = setup_enums_pb2.SetupStatus.Name(descriptor.status).removeprefix("SETUP_STATUS_")
         visibility_name = common_enums_pb2.Visibility.Name(descriptor.visibility).removeprefix("VISIBILITY_")
+        config = {
+            key: GrpcRegistry._plain_value(value, descriptor.id, key) for key, value in descriptor.config.fields.items()
+        }
+        if descriptor.id not in GrpcRegistry._nested_config_logged and any(
+            isinstance(value, dict | list) for value in config.values()
+        ):
+            GrpcRegistry._nested_config_logged.add(descriptor.id)
+            # TODO(validate): REGISTRY-PLAIN-CONFIG a setup's nested config reaches SetupInfo as plain dicts and lists
+            logger.info("[VALIDATE REGISTRY-PLAIN-CONFIG] setup %s config converted with nested values", descriptor.id)
         return SetupInfo(
             setup_id=descriptor.id,
             name=descriptor.name,
@@ -150,8 +165,48 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             setup_version_id=descriptor.setup_version_id or None,
             setup_version=descriptor.setup_version or None,
             tags=list(descriptor.tags),
-            config=dict(descriptor.config) if descriptor.config else None,
+            config=config or None,
         )
+
+    @staticmethod
+    def _plain_value(value: struct_pb2.Value, setup_id: str, path: str) -> Any:
+        """Convert one ``google.protobuf.Value`` to its plain Python value.
+
+        Numbers are floats, as with ``dict()`` and ``MessageToDict`` (a ``Struct`` has no integers).
+        A NaN or infinite number is kept, as ``dict()`` kept it, and logged: JSON has no such value,
+        so a later serialization silently rewrites it (``null`` from pydantic) or emits invalid JSON.
+
+        Args:
+            value: The protobuf value.
+            setup_id: Setup the config belongs to, for the log.
+            path: Dotted path of ``value`` in the config, for the log.
+
+        Returns:
+            A dict, list, float, string, boolean or None.
+        """
+        match value.WhichOneof("kind"):
+            case "struct_value":
+                return {
+                    key: GrpcRegistry._plain_value(item, setup_id, f"{path}.{key}")
+                    for key, item in value.struct_value.fields.items()
+                }
+            case "list_value":
+                return [
+                    GrpcRegistry._plain_value(item, setup_id, f"{path}[{index}]")
+                    for index, item in enumerate(value.list_value.values)
+                ]
+            case "number_value":
+                if not math.isfinite(value.number_value):
+                    logger.warning(
+                        "Setup %s config holds a non-finite number at %s: %s", setup_id, path, value.number_value
+                    )
+                return value.number_value
+            case "string_value":
+                return value.string_value
+            case "bool_value":
+                return value.bool_value
+            case _:
+                return None
 
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
