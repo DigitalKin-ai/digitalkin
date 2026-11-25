@@ -1,7 +1,7 @@
 """Tests for GrpcSetup against the SetupService + SetupVersionService protocol."""
 
 import asyncio
-import datetime
+import datetime as dt
 import logging
 from concurrent import futures
 from typing import Any
@@ -93,7 +93,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
 
 
 def _seed_setup(
-        mock_servicer: MockSetupServicer, name: str = "seeded", documentation: str = ""
+    mock_servicer: MockSetupServicer, name: str = "seeded", documentation: str = ""
 ) -> setup_messages_pb2.Setup:
     """Create a setup directly in the mock servicer's store."""
     response = mock_servicer.CreateSetup(
@@ -142,7 +142,7 @@ def _setup_msg(setup_id: str) -> setup_messages_pb2.Setup:
             setup_id=setup_id,
             version="1.0.0",
             content={"a": 1},
-            created_at=datetime.datetime.now(datetime.timezone.utc),
+            created_at=dt.datetime.now(dt.timezone.utc),
         ),
     )
 
@@ -447,11 +447,11 @@ class TestUpdateSetup:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_update_setup_unknown_id_is_refused(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         future = thread_pool.submit(
             asyncio.run, client.update_setup({"setup_id": "setups:gone", "name": "x", "content": {}})
@@ -506,11 +506,11 @@ class TestDeleteSetup:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_delete_setup_operation_error_is_false(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """An OperationError result reads as a failed deletion, as the former success=False did."""
         future = thread_pool.submit(asyncio.run, client.delete_setup({"setup_id": "setups:gone"}))
@@ -595,7 +595,7 @@ class TestResponseMapping:
 
     def test_wire_names_map_onto_the_sdk_fields(self) -> None:
         """organization_id and created_at keep their SDK names organisation_id / creation_date."""
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = dt.datetime.now(dt.timezone.utc)
         setup = setup_messages_pb2.Setup(
             id="setups:01X",
             organization_id="organizations:o",
@@ -626,7 +626,7 @@ class TestResponseMapping:
             id="setups:01X",
             name="n",
             status=wire,
-            current_setup_version=self._version(content={}, created_at=datetime.datetime.now(datetime.timezone.utc)),
+            current_setup_version=self._version(content={}, created_at=dt.datetime.now(dt.timezone.utc)),
         )
 
         assert GrpcSetup._to_setup_data(setup).status == expected
@@ -636,10 +636,38 @@ class TestResponseMapping:
         setup = setup_messages_pb2.Setup(
             id="setups:01X",
             name="n",
-            current_setup_version=self._version(content={}, created_at=datetime.datetime.now(datetime.timezone.utc)),
+            current_setup_version=self._version(content={}, created_at=dt.datetime.now(dt.timezone.utc)),
         )
 
         assert GrpcSetup._to_setup_data(setup).current_setup_version.structure is None
+
+    @pytest.mark.regression
+    def test_whole_numbers_read_back_as_int(self) -> None:
+        """Struct holds every number as a double: a stored 1 read back as 1.0 (magicbox 2026-11-25)."""
+        content = {
+            "id": 3,
+            "price": 9.5,
+            "negative": -2,
+            "flag": True,
+            "products": [{"id": 1, "tags": [1, 2.25]}],
+            "huge": 2**60,
+        }
+        setup = setup_messages_pb2.Setup(
+            id="setups:01X",
+            name="n",
+            current_setup_version=self._version(
+                content=content, created_at=dt.datetime.now(dt.timezone.utc)
+            ),
+        )
+
+        read = GrpcSetup._to_setup_data(setup).current_setup_version.content
+
+        assert read == {**content, "huge": float(2**60)}
+        assert type(read["id"]) is int
+        assert type(read["products"][0]["tags"][0]) is int
+        assert type(read["price"]) is float
+        assert type(read["flag"]) is bool
+        assert type(read["huge"]) is float
 
 
 class TestSetupVersions:
@@ -739,7 +767,7 @@ class TestSetupVersions:
     @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_list_setup_versions_drops_error_results(
-            self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+        self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A result holding an OperationError is dropped from the page and logged; the others are kept."""
         monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
@@ -748,7 +776,7 @@ class TestSetupVersions:
             setup_id="setups:s1",
             version="1.0.0",
             content={"a": 1},
-            created_at=datetime.datetime.now(datetime.timezone.utc),
+            created_at=dt.datetime.now(dt.timezone.utc),
         )
         client.stub = _mock_stub(
             "ListSetupVersions",
@@ -804,11 +832,11 @@ class TestSetupVersions:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_set_current_setup_version_unknown_version_is_refused(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
 
@@ -843,11 +871,11 @@ class TestListSetups:
     @pytest.mark.integration
     @pytest.mark.smoke
     def test_list_setups_success(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         first = _seed_setup(mock_servicer, name="first")
         second = _seed_setup(mock_servicer, name="second")
@@ -870,11 +898,11 @@ class TestListSetups:
     @pytest.mark.grpc
     @pytest.mark.integration
     def test_list_setups_sends_filters_and_statuses_by_name(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """SetupStatus was renumbered: the SDK member reaches the wire by its name."""
         ready = _seed_setup(mock_servicer, name="ready")
@@ -907,13 +935,13 @@ class TestListSetups:
     @pytest.mark.integration
     @pytest.mark.parametrize(("limit", "wire_limit"), [(None, 20), (0, 20), (-3, 1), (1, 1), (500, 100)])
     def test_list_setups_paginates_within_the_proto_bounds(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
-            limit: int | None,
-            wire_limit: int,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+        limit: int | None,
+        wire_limit: int,
     ) -> None:
         """PaginationRequest.limit is 1..100: an out-of-range limit is clamped, never sent."""
         seeded = [_seed_setup(mock_servicer, name=f"s{i}") for i in range(3)]
@@ -924,7 +952,7 @@ class TestListSetups:
 
         assert (request.pagination.limit, request.pagination.offset) == (wire_limit, 1)
         assert page.total_count == 3
-        assert [s.id for s in page.setups] == [s.id for s in seeded[1: 1 + wire_limit]]
+        assert [s.id for s in page.setups] == [s.id for s in seeded[1 : 1 + wire_limit]]
 
     @pytest.mark.grpc
     @pytest.mark.validation
@@ -940,7 +968,7 @@ class TestListSetups:
     @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_list_setups_drops_error_results(
-            self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+        self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A result holding an OperationError is dropped from the page and logged; the others are kept."""
         monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
@@ -970,7 +998,7 @@ class TestListSetups:
     @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_list_setups_drops_a_setup_without_a_version(
-            self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+        self, client: GrpcSetup, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """current_setup_version is absent while a setup has none yet; SetupData cannot hold that."""
         monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
@@ -1003,11 +1031,11 @@ class TestCreateSetupVersion:
     @pytest.mark.integration
     @pytest.mark.smoke
     def test_create_setup_version_success(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
         original = setup.current_setup_version.id
@@ -1041,11 +1069,11 @@ class TestCreateSetupVersion:
     @pytest.mark.grpc
     @pytest.mark.integration
     def test_create_setup_version_can_activate_it(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
 
@@ -1068,11 +1096,11 @@ class TestCreateSetupVersion:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_create_setup_version_unknown_setup_is_refused(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         future = thread_pool.submit(
             asyncio.run,
@@ -1116,11 +1144,11 @@ class TestGetSetupVersion:
     @pytest.mark.integration
     @pytest.mark.smoke
     def test_get_setup_version_success(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer, documentation="the house voice")
         version_id = setup.current_setup_version.id
@@ -1138,11 +1166,11 @@ class TestGetSetupVersion:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_get_setup_version_unknown_id_is_refused(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         future = thread_pool.submit(asyncio.run, client.get_setup_version({"setup_version_id": "setup_versions:gone"}))
         _exchange(future, test_channel, "GetSetupVersion", mock_servicer.GetSetupVersion)
@@ -1164,11 +1192,11 @@ class TestUpdateSetupVersion:
     @pytest.mark.integration
     @pytest.mark.smoke
     def test_update_setup_version_sends_only_the_supplied_field(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer, documentation="kept")
         version_id = setup.current_setup_version.id
@@ -1191,11 +1219,11 @@ class TestUpdateSetupVersion:
     @pytest.mark.grpc
     @pytest.mark.integration
     def test_update_setup_version_edits_the_active_version_in_place(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
         version_id = setup.current_setup_version.id
@@ -1225,11 +1253,11 @@ class TestUpdateSetupVersion:
     @pytest.mark.grpc
     @pytest.mark.integration
     def test_update_setup_version_empty_documentation_clears_it(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """An empty documentation is a real value (it clears the text), unlike an absent key."""
         setup = _seed_setup(mock_servicer, documentation="old")
@@ -1247,11 +1275,11 @@ class TestUpdateSetupVersion:
     @pytest.mark.grpc
     @pytest.mark.integration
     def test_update_setup_version_empty_label_stays_unset(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Version is optional with min_len 1: "" must not reach the wire as a set value."""
         setup = _seed_setup(mock_servicer)
@@ -1273,11 +1301,11 @@ class TestUpdateSetupVersion:
     @pytest.mark.integration
     @pytest.mark.edge_case
     def test_update_setup_version_unknown_id_is_refused(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         future = thread_pool.submit(
             asyncio.run, client.update_setup_version({"setup_version_id": "setup_versions:gone", "version": "2"})
@@ -1313,14 +1341,14 @@ class TestUpdateSetupVersion:
             ({"version": "2"}, "setup_version_id is required"),
             ({"setup_version_id": "setup_versions:v1", "content": "not-a-dict"}, "content must be an object"),
             (
-                    {"setup_version_id": "setup_versions:v1", "content": {"output_format_spec": "x" * 4096}},
-                    "must stay under 4096",
+                {"setup_version_id": "setup_versions:v1", "content": {"output_format_spec": "x" * 4096}},
+                "must stay under 4096",
             ),
             ({"setup_version_id": "setup_versions:v1", "documentation": "x" * 301}, "documentation is 301 characters"),
         ],
     )
     async def test_update_setup_version_invalid_payload_no_rpc(
-            self, client: GrpcSetup, payload: dict, message: str
+        self, client: GrpcSetup, payload: dict, message: str
     ) -> None:
         with pytest.raises(ValueError, match=message):
             await client.update_setup_version(payload)
@@ -1333,11 +1361,11 @@ class TestDeleteSetupVersion:
     @pytest.mark.integration
     @pytest.mark.smoke
     def test_delete_setup_version_success(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
         staged = _stage(mock_servicer, setup.id)
@@ -1354,12 +1382,12 @@ class TestDeleteSetupVersion:
     @pytest.mark.edge_case
     @pytest.mark.parametrize("current", [False, True])
     def test_delete_setup_version_operation_error_is_false(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
-            current: bool,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+        current: bool,
     ) -> None:
         """NOT_FOUND (unknown id) and FAILED_PRECONDITION (the active version) both read as False."""
         setup = _seed_setup(mock_servicer)
@@ -1395,14 +1423,14 @@ class TestNewRpcStatusErrors:
     @pytest.mark.validation
     @pytest.mark.parametrize(("method", "rpc", "payload"), _BAD_PREFIX_CALLS)
     def test_invalid_argument_is_a_server_error(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
-            method: str,
-            rpc: str,
-            payload: dict,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+        method: str,
+        rpc: str,
+        payload: dict,
     ) -> None:
         """The mock validates like the server interceptor and answers INVALID_ARGUMENT."""
         future = thread_pool.submit(asyncio.run, getattr(client, method)(payload))
@@ -1416,13 +1444,13 @@ class TestNewRpcStatusErrors:
     @pytest.mark.edge_case
     @pytest.mark.parametrize(("method", "rpc", "payload"), _BAD_PREFIX_CALLS)
     def test_not_found_status_is_a_server_error(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            thread_pool: futures.ThreadPoolExecutor,
-            method: str,
-            rpc: str,
-            payload: dict,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        method: str,
+        rpc: str,
+        payload: dict,
     ) -> None:
         future = thread_pool.submit(asyncio.run, getattr(client, method)(payload))
         _exchange(future, test_channel, rpc, _refuse_with(grpc.StatusCode.NOT_FOUND))
@@ -1438,11 +1466,11 @@ class TestNewRequestsPassProtovalidate:
     @pytest.mark.integration
     @pytest.mark.contract
     def test_built_requests_are_valid(
-            self,
-            client: GrpcSetup,
-            test_channel: grpc_testing.Channel,
-            mock_servicer: MockSetupServicer,
-            thread_pool: futures.ThreadPoolExecutor,
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         setup = _seed_setup(mock_servicer)
         staged = _stage(mock_servicer, setup.id)
@@ -1761,7 +1789,7 @@ class TestMissingContentDiagnostic:
         """{} is a legitimate configuration; only an unset Struct is the failure."""
         version = self._stub()
         version.content.SetInParent()
-        version.created_at.FromDatetime(datetime.datetime.now(datetime.timezone.utc))
+        version.created_at.FromDatetime(dt.datetime.now(dt.timezone.utc))
         setup = setup_messages_pb2.Setup(id="setups:01X", name="n", module_id="modules:m")
         setup.current_setup_version.CopyFrom(version)
 

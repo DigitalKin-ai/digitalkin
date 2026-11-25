@@ -439,7 +439,8 @@ class HistoryCompactor:
         Returns:
             The summarizer model.
         """
-        # Low, so the summary restates the folded history rather than embellishing it.
+        # Low, so the summary restates the folded history rather than embellishing it. One call per summary:
+        # a cache written for it is never read back, and writing costs more than plain input.
         return SafeLiteLLM.from_spec(
             model_spec,
             extra_headers=extra_headers,
@@ -447,6 +448,7 @@ class HistoryCompactor:
             temperature=0.2,
             mission_id=mission_id,
             cancel_event=cancel_event,
+            prompt_caching=False,
         )
 
     @classmethod

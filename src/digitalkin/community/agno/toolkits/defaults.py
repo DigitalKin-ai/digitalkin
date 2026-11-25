@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from agno.agent import Agent
+from agno.models.base import Model
 from agno.team import Team
 
 from digitalkin.community.agno.toolkits.chat_history import ChatHistoryTools
@@ -77,10 +78,11 @@ class DefaultToolkits:
 
     @staticmethod
     def bind_host(tools: list[Any] | Callable[..., list[Any]] | None, host: Any) -> None:
-        """Late-bind the constructed Agent/Team into ChatHistoryTools and the LoadManager.
+        """Late-bind the constructed Agent/Team into ChatHistoryTools, the LoadManager and ServicesManager.
 
         The LoadManager is rebound to ``host.tools`` when the host holds a plain list (a
         sub-agent, which copies the list it is given); a tools factory keeps its binding.
+        ServicesManager gets the host's model as the writer of its ``generate`` sections.
 
         Args:
             tools: The tools list (or a make_tools_factory callable) containing the toolkits.
@@ -90,3 +92,9 @@ class DefaultToolkits:
         loader = LoadManager.find(tools)
         if loader is not None and isinstance(host, Agent | Team):
             loader.bind_to(host)
+        model = host.model if isinstance(host, Agent | Team) else None
+        if not isinstance(model, Model):
+            return
+        for tool in tools(None) if callable(tools) and not isinstance(tools, list) else tools or []:
+            if isinstance(tool, ServicesManager):
+                tool.bind_writer(model)

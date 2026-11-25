@@ -266,10 +266,12 @@ class TestToolReferenceResolution:
         registry: FakeRegistry,
     ) -> None:
         """Multiple selected tools all resolve."""
-        ref = ToolReference(selected_tools=[
-            ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
-            ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True}),
-        ])
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+                ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True}),
+            ]
+        )
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
@@ -308,9 +310,9 @@ class TestToolReferenceResolution:
         # The known trigger 'search' survives; unknown names are filtered out.
         assert len(result) == 1
         assert [t.name for t in result[0].tools] == ["search"]
-        # The unknown names are surfaced in a single warning.
+        # The unknown name is surfaced in a single warning; the SDK's healthcheck_ping is not unknown.
         mock_logger.warning.assert_called_once()
-        assert mock_logger.warning.call_args.args[2] == ["bogus", "healthcheck_ping"]
+        assert mock_logger.warning.call_args.args[2] == ["bogus"]
 
     @pytest.mark.asyncio
     async def test_known_triggers_emit_no_warning(self, registry: FakeRegistry) -> None:
@@ -350,7 +352,9 @@ class TestSetupModelToolResolution:
 
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                ),
             )
 
         setup = ArchetypeSetup()
@@ -372,10 +376,14 @@ class TestSetupModelToolResolution:
 
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                ),
             )
             analyzer_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]
+                ),
             )
 
         setup = ArchetypeSetup()
@@ -428,7 +436,9 @@ class TestNestedToolReferenceResolution:
 
         class ToolConfig(BaseModel):
             tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                ),
             )
 
         class ArchetypeSetup(SetupModel):
@@ -453,7 +463,9 @@ class TestNestedToolReferenceResolution:
 
         class DeepConfig(BaseModel):
             analyzer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]
+                ),
             )
 
         class MiddleConfig(BaseModel):
@@ -482,8 +494,12 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             tools: list[ToolReference] = Field(
                 default_factory=lambda: [
-                    ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
-                    ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
+                    ToolReference(
+                        selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                    ),
+                    ToolReference(
+                        selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]
+                    ),
                 ],
             )
 
@@ -515,11 +531,15 @@ class TestNestedToolReferenceResolution:
                 default_factory=lambda: [
                     ToolWrapper(
                         name="search",
-                        tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                        tool=ToolReference(
+                            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                        ),
                     ),
                     ToolWrapper(
                         name="writer",
-                        tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]),
+                        tool=ToolReference(
+                            selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]
+                        ),
                     ),
                 ],
             )
@@ -545,8 +565,12 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             tools_by_name: dict[str, ToolReference] = Field(
                 default_factory=lambda: {
-                    "search": ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
-                    "analyzer": ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
+                    "search": ToolReference(
+                        selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                    ),
+                    "analyzer": ToolReference(
+                        selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]
+                    ),
                 },
             )
 
@@ -574,8 +598,16 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             wrappers_by_name: dict[str, ToolWrapper] = Field(
                 default_factory=lambda: {
-                    "search": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})])),
-                    "writer": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})])),
+                    "search": ToolWrapper(
+                        tool=ToolReference(
+                            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                        )
+                    ),
+                    "writer": ToolWrapper(
+                        tool=ToolReference(
+                            selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]
+                        )
+                    ),
                 },
             )
 
@@ -726,13 +758,17 @@ class TestComplexArchetypeSetup:
         class ResearchConfig(BaseModel):
             max_depth: int = 3
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                ),
             )
 
         class OutputConfig(BaseModel):
             format: str = "markdown"
             writer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]
+                ),
             )
 
         class ResearchArchetypeSetup(SetupModel):
@@ -740,7 +776,9 @@ class TestComplexArchetypeSetup:
             research: ResearchConfig = Field(default_factory=ResearchConfig)
             output: OutputConfig = Field(default_factory=OutputConfig)
             analyzer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]
+                ),
             )
             additional_tools: list[ToolReference] = Field(default_factory=list)
 
@@ -765,10 +803,14 @@ class TestComplexArchetypeSetup:
 
         class ArchetypeSetup(SetupModel):
             existing_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]
+                ),
             )
             missing_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="nonexistent-setup", triggers={"search": True})]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="nonexistent-setup", triggers={"search": True})]
+                ),
             )
             empty_tool: ToolReference = Field(default_factory=ToolReference)
 
@@ -970,7 +1012,8 @@ class TestResolveSingleLogs:
 
     @pytest.mark.asyncio
     async def test_schema_fetch_failed_logs_exception_with_reason(
-        self, registry: FakeRegistry,
+        self,
+        registry: FakeRegistry,
     ) -> None:
         communication = AsyncMock()
         communication.get_module_schemas.side_effect = RuntimeError("boom")
@@ -1045,6 +1088,37 @@ class TestResolveSingleLogs:
         assert len(zero_warns) == 1
         assert "reason=all_user_triggers_unknown" in zero_warns[0]
 
+    @pytest.mark.regression
+    @pytest.mark.asyncio
+    async def test_sdk_utility_protocols_are_not_unknown_triggers(self, registry: FakeRegistry) -> None:
+        """Kins enable healthcheck_*, never exposed to the model: they were reported as unknown (DEV-975)."""
+        communication = _mock_communication_two_triggers()
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(
+                    setup_id="setup-search-001",
+                    triggers={
+                        "search": True,
+                        "healthcheck_ping": True,
+                        "healthcheck_services": True,
+                        "healthcheck_status": True,
+                        "summary": True,
+                    },
+                ),
+            ],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert [t.name for t in result[0].tools] == ["search", "analyze"], "summary is stale: analyze comes on"
+        unknown = [w for w in _warnings(mock_logger) if "does not expose" in w]
+        assert len(unknown) == 1
+        assert "['summary']" in unknown[0], "only a real stale trigger is reported"
+        assert "healthcheck" not in unknown[0]
+        audit = next(d for d in _debugs(mock_logger) if "[perf] tool_resolve" in d)
+        assert "user_triggers_enabled=2" in audit
+
     @pytest.mark.asyncio
     async def test_misregistered_module_never_reaches_tool_cache(self, registry: FakeRegistry) -> None:
         """Staging incident regression: a module answering with the wrong trigger surface is dropped.
@@ -1104,8 +1178,10 @@ class TestResolveSingleLogs:
         with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
             result = await ref.resolve(registry, communication)
 
-        assert [t.name for t in result[0].tools] == ["search"]
+        # 'bogus' is a stale name next to a current one: 'analyze', never saved by the kin, comes on (DEV-975).
+        assert [t.name for t in result[0].tools] == ["search", "analyze"]
         warnings = _warnings(mock_logger)
+        assert any("[VALIDATE TRIGGER-DEFAULT-ON]" in w and "['analyze']" in w for w in warnings)
         # The "unknown" warning still fires for 'bogus'.
         assert any("does not expose" in w for w in warnings)
         # But no zero-functions warning since post_filter=1.
@@ -1186,10 +1262,12 @@ class TestCollectFromToolRefLogs:
 
         class ArchetypeSetup(SetupModel):
             tools: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[
-                    ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
-                    ToolSelection(setup_id="setup-missing-999", triggers={"search": True}),
-                ]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[
+                        ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+                        ToolSelection(setup_id="setup-missing-999", triggers={"search": True}),
+                    ]
+                ),
             )
 
         setup = ArchetypeSetup()
@@ -1200,10 +1278,7 @@ class TestCollectFromToolRefLogs:
 
         assert len(cache.entries) == 1
         warnings = _warnings(mock_logger)
-        assert any(
-            "unresolved setup_id(s)" in w and "setup-missing-999" in w
-            for w in warnings
-        ), warnings
+        assert any("unresolved setup_id(s)" in w and "setup-missing-999" in w for w in warnings), warnings
 
     @pytest.mark.asyncio
     async def test_tool_cache_built_log_includes_per_entry_counts(self, registry: FakeRegistry) -> None:
@@ -1211,9 +1286,11 @@ class TestCollectFromToolRefLogs:
 
         class ArchetypeSetup(SetupModel):
             tools: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[
-                    ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
-                ]),
+                default_factory=lambda: ToolReference(
+                    selected_tools=[
+                        ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+                    ]
+                ),
             )
 
         setup = ArchetypeSetup()

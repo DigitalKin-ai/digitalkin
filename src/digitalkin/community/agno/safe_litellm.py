@@ -13,7 +13,12 @@
   rejected as too long is folded and resent once. A history window opening mid-exchange is prefixed
   with a note, giving Claude the user-first transcript it expects.
 - Recovery: an empty reply is retried once with a continuation prompt, then replaced by a notice; a
-  400 blaming the request's images is retried once without them and later requests drop images.
+  400 blaming the request's images is retried once without them and later requests drop images; a
+  transient failure (connection error, 429, 5xx) is resent once, a timeout never (litellm resends
+  nothing itself: a request the proxy cut at 120 s would take as long again). An SSE error frame
+  sent after a keepalive ping is classified by its ``code`` the same way.
+- Diagnosis: a streamed call that fails, or lasts a minute or more, logs what it received
+  (first chunk, longest silence, text, reasoning and tool-call argument sizes).
 - Cancellation: no request starts once ``cancel_event`` is set.
 - Output: a provider refusal (``finish_reason: content_filter``) raises ``OutputCheckError`` instead
   of completing empty; ``url_citation`` annotations (http/https only) become agno citations, which
@@ -22,9 +27,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, cast
 from urllib.parse import urlsplit
 
@@ -36,9 +43,10 @@ from agno.models.message import Citations, Message, UrlCitation
 from agno.models.response import ModelResponse
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.utils import trim_messages
-from openai import APIConnectionError, BadRequestError, InternalServerError
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel
 
+from digitalkin.community.agno.stream_progress import StreamProgress
 from digitalkin.community.litellm.cost import CostTrackingLogger
 from digitalkin.community.litellm.registry import LiteLLMRegistry
 from digitalkin.community.litellm.settings import get_litellm_settings
@@ -46,7 +54,6 @@ from digitalkin.logger import logger
 from digitalkin.models.events import ModelInfo, RunErrorCode
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncIterator
 
     from agno.metrics import MessageMetrics
@@ -132,6 +139,10 @@ class SafeLiteLLM(LiteLLM):
     # Id of the streamed response whose served model this task already reported. The proxy repeats
     # its headers on every chunk; the model is reported once per LLM call.
     _model_reported_for: ClassVar[ContextVar[str | None]] = ContextVar("safe_litellm_model_reported_for", default=None)
+    # A refusal seen mid-stream, raised once the stream has ended so litellm closes its response.
+    _stream_refusal: ClassVar[ContextVar[OutputCheckError | None]] = ContextVar(
+        "safe_litellm_stream_refusal", default=None
+    )
 
     @classmethod
     def from_spec(
@@ -144,6 +155,7 @@ class SafeLiteLLM(LiteLLM):
         mission_id: str | None = None,
         cancel_event: asyncio.Event | None = None,
         compactor: HistoryCompactor | None = None,
+        prompt_caching: bool = True,
     ) -> SafeLiteLLM:
         """Build a model routed through the LiteLLM proxy of ``LiteLLMRegistry.shared()``.
 
@@ -159,6 +171,8 @@ class SafeLiteLLM(LiteLLM):
                 the mission's cost service.
             cancel_event: Once set, the model refuses further requests.
             compactor: Folds the replayed history at its threshold. Head models only.
+            prompt_caching: Place Anthropic cache breakpoints on a model that takes them. False for a
+                one-shot call, whose cache would be written and never read back.
 
         Returns:
             The configured model.
@@ -167,8 +181,9 @@ class SafeLiteLLM(LiteLLM):
         CostTrackingLogger.register()
 
         # Forwarded as top-level ``litellm.acompletion`` kwargs: ``metadata`` reaches the success
-        # callback. ``num_retries`` only retries the HTTP request to the proxy, never the run.
-        request_params: dict[str, Any] = {"drop_params": True, "num_retries": 2}
+        # callback. ``num_retries`` becomes the OpenAI client's ``max_retries``, which resends a request
+        # the proxy cut at its timeout (504) unchanged; it is 0 and ``_resend`` decides instead.
+        request_params: dict[str, Any] = {"drop_params": True, "num_retries": 0}
         if mission_id:
             request_params["metadata"] = {CostTrackingLogger.MISSION_METADATA_KEY: mission_id}
         # Anthropic only accepts the default temperature alongside thinking.
@@ -176,7 +191,7 @@ class SafeLiteLLM(LiteLLM):
         if summarized_thinking:
             request_params["thinking"] = {"type": "adaptive", "display": "summarized"}
         send_temperature = cls.supports_temperature(model_spec.name) and not summarized_thinking
-        enable_prompt_caching = cls.uses_anthropic_cache(model_spec.name)
+        enable_prompt_caching = prompt_caching and cls.uses_anthropic_cache(model_spec.name)
         logger.info(
             "model=%s send_temperature=%s enable_prompt_caching=%s summarized_thinking=%s",
             model_spec.name,
@@ -384,7 +399,10 @@ class SafeLiteLLM(LiteLLM):
         return model_response
 
     def _parse_provider_response_delta(self, response_delta: Any) -> ModelResponse:
-        """Parse a streamed chunk, raising on a refusal and keeping the URL citations.
+        """Parse a streamed chunk, noting a refusal and keeping the URL citations.
+
+        A refusal is raised once the stream has ended (``_ainvoke_stream_once``), not here: raised
+        mid-stream it left litellm's response open ("Unclosed client session").
 
         Args:
             response_delta: One litellm streaming chunk.
@@ -392,7 +410,10 @@ class SafeLiteLLM(LiteLLM):
         Returns:
             The parsed delta.
         """
-        self._raise_on_refusal(response_delta)
+        try:
+            self._raise_on_refusal(response_delta)
+        except OutputCheckError as refusal:
+            self._stream_refusal.set(refusal)
         model_response = super()._parse_provider_response_delta(response_delta)
         self._report_served_model(model_response, response_delta, streamed=True)
         if response_delta.choices:
@@ -706,7 +727,7 @@ class SafeLiteLLM(LiteLLM):
     async def _ainvoke_once(
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
     ) -> ModelResponse:
-        """Send one request, retrying it once without images if the provider rejects them.
+        """Send one request, resending it once when :meth:`_resend` allows it.
 
         Args:
             messages: Agno messages to send.
@@ -717,26 +738,30 @@ class SafeLiteLLM(LiteLLM):
             The parsed response.
 
         Raises:
-            BadRequestError: When the rejection is not the images' fault, or recurs without them.
-            APIConnectionError: Likewise, for a proxy 500 surfaced as a connection error.
-            InternalServerError: Likewise, for a proxy 500.
+            APIConnectionError: When the failure is not resent (a timeout), or recurs.
+            APIStatusError: Likewise, for a rejection or a server error.
         """
         self._raise_if_cancelled()
         try:
             return await super().ainvoke(messages, assistant_message, **kwargs)
-        except (BadRequestError, APIConnectionError, InternalServerError) as exc:
-            if not self._should_retry_without_images(exc):
+        except (APIConnectionError, APIStatusError) as exc:
+            if not await self._resend(exc):
                 raise
         self._raise_if_cancelled()
         return await super().ainvoke(messages, assistant_message, **kwargs)
 
-    async def _ainvoke_stream_once(
+    async def _ainvoke_stream_once(  # ruff: ignore[complex-structure] - both attempts and the frame classification
         self, messages: list[Message], assistant_message: Message, kwargs: dict[str, Any]
     ) -> AsyncIterator[ModelResponse]:
         """Stream one request, resending it once if it fails before any output.
 
-        Resent without images when the provider rejects them, or unchanged when the connection to the
-        proxy drops before the first chunk (``num_retries`` only covers opening the stream).
+        Resent unchanged when the connection to the proxy drops before the first chunk, or when
+        :meth:`_resend` allows it. Once the proxy has sent a keepalive ping, a failure arrives as an SSE
+        error frame under a 200 and litellm reports it as such a drop; the frame's ``code`` then decides
+        like an HTTP status: a timeout (408, 504) or a rejection (4xx but 429) is not resent, except a
+        rejection blaming the images, resent without them. A call that fails, or ends after a minute, logs
+        what it received (:class:`StreamProgress`): the proxy cuts a call silent for 120 s, and the log
+        tells whether it was silent from the start or writing text, reasoning or tool-call arguments.
 
         Args:
             messages: Agno messages to send.
@@ -747,35 +772,117 @@ class SafeLiteLLM(LiteLLM):
             Streamed responses.
 
         Raises:
-            BadRequestError: When the rejection is not the images' fault, output was already
-                streamed, or the request is rejected again without images.
-            APIConnectionError: Likewise, for a proxy 500 surfaced as a connection error.
-            InternalServerError: Likewise, for a proxy 500.
-            MidStreamFallbackError: When the stream drops after output, or drops again.
+            APIConnectionError: When the failure is not resent (a timeout), output was already
+                streamed, or the failure recurs.
+            APIStatusError: Likewise, for a rejection or a server error.
+            MidStreamFallbackError: When the stream drops after output, drops again, or ends on a
+                timeout or rejection error frame.
         """
         self._raise_if_cancelled()
-        streamed = False
-        try:
-            async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
-                streamed = True
-                yield chunk
-        except MidStreamFallbackError as exc:
-            if streamed or not exc.is_pre_first_chunk:
-                raise
-            # TODO(validate): STREAM-DROP-RETRY a stream dropped before its first chunk is resent once
+        progress = StreamProgress()
+        self._stream_refusal.set(None)
+        try:  # ruff: ignore[too-many-statements-in-try-clause] - both attempts' failures are diagnosed
+            resend = False
+            try:
+                async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
+                    progress.see(chunk)
+                    yield chunk
+            except MidStreamFallbackError as exc:
+                if progress.chunks or not exc.is_pre_first_chunk:
+                    raise
+                # The frame's code sits on the first APIError of the chain that is not another drop wrapper:
+                # litellm may wrap the drop twice, and a wrapper carries no code.
+                frame = exc.__context__
+                while frame is not None and (
+                    not isinstance(frame, APIError) or isinstance(frame, MidStreamFallbackError)
+                ):
+                    frame = frame.__context__
+                status = int(frame.code) if isinstance(frame, APIError) and frame.code and frame.code.isdigit() else 0
+                if status in {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.GATEWAY_TIMEOUT} or (
+                    HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR
+                    and status != HTTPStatus.TOO_MANY_REQUESTS
+                    and not self._should_retry_without_images(exc)
+                ):
+                    # TODO(validate): STREAM-ERROR-FRAME a timeout or rejection frame after a keepalive fails once
+                    logger.warning(
+                        "[VALIDATE STREAM-ERROR-FRAME] Error frame %d after a keepalive, not resent (model=%s): %s",
+                        status,
+                        self.id,
+                        exc,
+                    )
+                    raise
+                # TODO(validate): STREAM-DROP-RETRY a stream dropped before its first chunk is resent once
+                logger.warning(
+                    "[VALIDATE STREAM-DROP-RETRY] Stream dropped before its first chunk, resending once (model=%s): %s",
+                    self.id,
+                    exc,
+                )
+                resend = True
+            except (APIConnectionError, APIStatusError) as exc:
+                if progress.chunks or not await self._resend(exc):
+                    raise
+                resend = True
+            if resend:
+                self._raise_if_cancelled()
+                async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
+                    progress.see(chunk)
+                    yield chunk
+        except Exception:
             logger.warning(
-                "[VALIDATE STREAM-DROP-RETRY] Stream dropped before its first chunk, resending once (model=%s): %s",
+                "Model stream failed (model=%s, %d messages, %d characters sent): %s",
                 self.id,
-                exc,
+                len(messages),
+                sum(len(str(message.content or "")) for message in messages),
+                progress.summary(),
             )
-        except (BadRequestError, APIConnectionError, InternalServerError) as exc:
-            if streamed or not self._should_retry_without_images(exc):
-                raise
-        else:
-            return
-        self._raise_if_cancelled()
-        async for chunk in super().ainvoke_stream(messages, assistant_message, **kwargs):
-            yield chunk
+            raise
+        refusal = self._stream_refusal.get()
+        if refusal is not None:
+            self._stream_refusal.set(None)
+            # TODO(validate): STREAM-REFUSAL-CLOSED a refused stream is read to its end: no "Unclosed client session"
+            logger.warning("[VALIDATE STREAM-REFUSAL-CLOSED] Refused stream read to its end (model=%s)", self.id)
+            raise refusal
+        if progress.elapsed() >= 60:  # ruff: ignore[magic-value-comparison] - a near miss of the proxy's 120 s
+            logger.info(
+                "Slow model stream (model=%s, %d messages, %d characters sent): %s",
+                self.id,
+                len(messages),
+                sum(len(str(message.content or "")) for message in messages),
+                progress.summary(),
+            )
+
+    async def _resend(self, exc: APIConnectionError | APIStatusError) -> bool:
+        """Decide whether a failed request is resent once, pausing first when the failure is transient.
+
+        A timeout (the proxy's 504 at 120 s) is never resent: the same request takes as long again.
+        A rejection blaming the images is resent without them. A transient failure (connection
+        error, 429, 5xx) is resent unchanged after ``delay_between_retries``.
+
+        Args:
+            exc: The failure of the request.
+
+        Returns:
+            True when the request is to be sent once more.
+        """
+        if isinstance(exc, APITimeoutError):
+            # TODO(validate): NO-TIMEOUT-RESEND a request cut by the proxy timeout fails once, not 3 times in 6 min
+            logger.warning(
+                "[VALIDATE NO-TIMEOUT-RESEND] Request cut by the timeout, not resent (model=%s): %s", self.id, exc
+            )
+            return False
+        if self._should_retry_without_images(exc):
+            return True
+        if (
+            isinstance(exc, APIStatusError)
+            and exc.status_code != HTTPStatus.TOO_MANY_REQUESTS
+            and exc.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
+        ):
+            return False
+        logger.warning(
+            "Transient model failure, resending once in %ss (model=%s): %s", self.delay_between_retries, self.id, exc
+        )
+        await asyncio.sleep(self.delay_between_retries)
+        return True
 
     def _should_retry_without_images(self, exc: Exception) -> bool:
         """Decide whether a rejected request is worth resending without images, latching if so.

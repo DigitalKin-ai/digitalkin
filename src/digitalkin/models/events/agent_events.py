@@ -61,7 +61,7 @@ class BaseAgentRunEvent(BaseModel):
 class RunStartedEvent(BaseAgentRunEvent):
     """Event emitted when an agent run starts."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.RUN_STARTED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.RUN_STARTED, description="Event type")
     run_id: str | None = Field(default=None, description="Unique identifier for this run")
     thread_id: str | None = Field(default=None, description="Thread/conversation identifier")
 
@@ -87,7 +87,7 @@ class ModelInfo(BaseModel):
 class TextMessageStartedEvent(BaseAgentRunEvent):
     """Event emitted when a new text message sequence begins."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.TEXT_MESSAGE_STARTED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.TEXT_MESSAGE_STARTED, description="Event type")
     message_id: str = Field(..., description="Unique ID for this text message")
     name: str | None = Field(default=None, description="Author label — the sub-agent that owns this message")
     model: ModelInfo | None = Field(default=None, description="Model that wrote this message")
@@ -96,14 +96,14 @@ class TextMessageStartedEvent(BaseAgentRunEvent):
 class TextMessageCompletedEvent(BaseAgentRunEvent):
     """Event emitted when a text message sequence ends."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.TEXT_MESSAGE_COMPLETED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.TEXT_MESSAGE_COMPLETED, description="Event type")
     message_id: str = Field(..., description="ID of the text message being closed")
 
 
 class RunContentEvent(BaseAgentRunEvent):
     """Event emitted when the agent produces content (text, reasoning, etc.)."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.RUN_CONTENT, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.RUN_CONTENT, description="Event type")
     content: str | None = Field(default=None, description="Text content produced by the agent")
     reasoning_content: str | None = Field(default=None, description="Reasoning content (if extended thinking on)")
     content_type: str | None = Field(default=None, description="Type of content (text, json, etc.)")
@@ -113,7 +113,7 @@ class RunContentEvent(BaseAgentRunEvent):
 class RunCompletedEvent(BaseAgentRunEvent):
     """Event emitted when an agent run completes successfully."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.RUN_COMPLETED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.RUN_COMPLETED, description="Event type")
     run_id: str | None = Field(default=None, description="Unique identifier for this run")
     final_content: str | None = Field(default=None, description="Final accumulated content")
     usage: dict[str, Any] | None = Field(default=None, description="Token usage statistics")
@@ -123,7 +123,7 @@ class RunCompletedEvent(BaseAgentRunEvent):
 class RunErrorEvent(BaseAgentRunEvent):
     """Event emitted when an agent run encounters an error."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.RUN_ERROR, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.RUN_ERROR, description="Event type")
     error_type: RunErrorCode = Field(
         default=RunErrorCode.UNKNOWN, validate_default=True, description="Why the run failed"
     )
@@ -139,7 +139,7 @@ class SubagentStartedEvent(BaseAgentRunEvent):
     only and need not be unique.
     """
 
-    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_STARTED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.SUBAGENT_STARTED, description="Event type")
     name: str = Field(..., description="Display name of the child agent")
     parent_subagent_run_id: str | None = Field(
         default=None, description="Owning delegation when this one is itself nested"
@@ -152,7 +152,7 @@ class SubagentStartedEvent(BaseAgentRunEvent):
 class SubagentFinishedEvent(BaseAgentRunEvent):
     """Event emitted when a delegated run completes."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_FINISHED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.SUBAGENT_FINISHED, description="Event type")
     result: str | None = Field(default=None, description="The child agent's final content")
     outcome: Literal["suspended"] | None = Field(
         default=None, description="None means success; suspended means paused awaiting outside input (HITL)"
@@ -165,7 +165,7 @@ class SubagentErrorEvent(BaseAgentRunEvent):
     Distinct from :class:`RunErrorEvent`: one child failing does not end the parent's run.
     """
 
-    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_ERROR, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.SUBAGENT_ERROR, description="Event type")
     message: str = Field(..., description="Error message from the child agent")
     code: RunErrorCode = Field(
         default=RunErrorCode.UNKNOWN, validate_default=True, description="Why the delegated run failed"
@@ -175,7 +175,7 @@ class SubagentErrorEvent(BaseAgentRunEvent):
 class ReasoningStartedEvent(BaseAgentRunEvent):
     """Event emitted when a reasoning phase starts."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.REASONING_STARTED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.REASONING_STARTED, description="Event type")
     reasoning_id: str | None = Field(default=None, description="Unique ID for this reasoning phase")
     model: ModelInfo | None = Field(default=None, description="Model doing the reasoning")
 
@@ -183,7 +183,7 @@ class ReasoningStartedEvent(BaseAgentRunEvent):
 class ReasoningContentDeltaEvent(BaseAgentRunEvent):
     """Event emitted during extended thinking/reasoning phases."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.REASONING_CONTENT_DELTA, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.REASONING_CONTENT_DELTA, description="Event type")
     delta: str = Field(..., description="Delta of reasoning content")
     reasoning_id: str | None = Field(default=None, description="ID of the parent reasoning phase")
 
@@ -191,7 +191,7 @@ class ReasoningContentDeltaEvent(BaseAgentRunEvent):
 class ReasoningStepEvent(BaseAgentRunEvent):
     """Event emitted for intermediate reasoning steps."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.REASONING_STEP, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.REASONING_STEP, description="Event type")
     delta: str = Field(..., description="Reasoning step content")
     reasoning_id: str | None = Field(default=None, description="ID of the parent reasoning phase")
 
@@ -199,7 +199,7 @@ class ReasoningStepEvent(BaseAgentRunEvent):
 class ReasoningCompletedEvent(BaseAgentRunEvent):
     """Event emitted when a reasoning phase completes."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.REASONING_COMPLETED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.REASONING_COMPLETED, description="Event type")
     reasoning_id: str | None = Field(default=None, description="ID of the reasoning phase being closed")
 
 
@@ -234,7 +234,7 @@ class ToolInfo(BaseModel):
 class ToolCallStartedEvent(BaseAgentRunEvent):
     """Event emitted when a tool call starts."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_STARTED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.TOOL_CALL_STARTED, description="Event type")
     tool: ToolInfo | None = Field(default=None, description="Tool information")
     model: ModelInfo | None = Field(default=None, description="Model that decided the call")
 
@@ -242,7 +242,7 @@ class ToolCallStartedEvent(BaseAgentRunEvent):
 class ToolCallCompletedEvent(BaseAgentRunEvent):
     """Event emitted when a tool call completes successfully."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_COMPLETED, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.TOOL_CALL_COMPLETED, description="Event type")
     tool: ToolInfo | None = Field(default=None, description="Tool information including result")
     content: str | None = Field(default=None, description="Tool execution result content")
 
@@ -250,9 +250,9 @@ class ToolCallCompletedEvent(BaseAgentRunEvent):
 class ToolCallErrorEvent(BaseAgentRunEvent):
     """Event emitted when a tool call encounters an error."""
 
-    event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_ERROR, description="Event type")
-    tool: ToolInfo | None = Field(None, description="Tool information")
-    error_message: str | None = Field(None, description="Error message")
+    event: AgentRunEvent = Field(default=AgentRunEvent.TOOL_CALL_ERROR, description="Event type")
+    tool: ToolInfo | None = Field(default=None, description="Tool information")
+    error_message: str | None = Field(default=None, description="Error message")
 
 
 class CustomEvent(BaseAgentRunEvent):
@@ -262,7 +262,7 @@ class CustomEvent(BaseAgentRunEvent):
     event subtype and a free-form ``value`` payload for metadata transfer.
     """
 
-    event: AgentRunEvent = Field(AgentRunEvent.CUSTOM, description="Event type")
+    event: AgentRunEvent = Field(default=AgentRunEvent.CUSTOM, description="Event type")
     name: str = Field(..., description="Application-defined event name (discriminator)")
     value: Any = Field(..., description="Application-defined payload")
 
@@ -278,7 +278,7 @@ class SourceCitation(BaseModel):
 class SourceCitationEvent(CustomEvent):
     """Custom event citing one source the agent used."""
 
-    name: Literal["source_citation"] = Field("source_citation", description="Event name (discriminator)")
+    name: Literal["source_citation"] = Field(default="source_citation", description="Event name (discriminator)")
     value: SourceCitation = Field(..., description="The cited source")
 
 
@@ -293,5 +293,5 @@ class MissionTitle(BaseModel):
 class MissionTitleEvent(CustomEvent):
     """Custom event proposing a title for the current mission."""
 
-    name: Literal["mission_title"] = Field("mission_title", description="Event name (discriminator)")
+    name: Literal["mission_title"] = Field(default="mission_title", description="Event name (discriminator)")
     value: MissionTitle = Field(..., description="The proposed title")

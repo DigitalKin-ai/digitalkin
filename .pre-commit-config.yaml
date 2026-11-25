@@ -83,12 +83,14 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        # --build avoids stale images; TEST_MARKER env is honored by entrypoint-test.sh
-        # (CLI args after the service name are ignored), so set the marker via env.
-        entry: docker compose -f docker-compose.yml run --rm -T --build -e "TEST_MARKER=not integration" tests
+        # Fast tests only, on the local venv: no Docker and no Redis (the integration tests need them),
+        # and no stress, stability or performance test. CI runs every marker in its own job.
+        # 8 processes, tests spread one by one: each process pays ~15 s of imports, so more do not help.
+        entry: uv run pytest -q -p no:warnings -n 8 --dist worksteal -m "not integration and not stress and not stability" --ignore=tests/performances --ignore=tests/benchmarks --ignore=tests/stability
         language: system
         pass_filenames: false
         types: [python]
         verbose: true
         files: ^(src/|tests/).*\.py$
         exclude: __version__\.py$
+        stages: [ pre-push ]

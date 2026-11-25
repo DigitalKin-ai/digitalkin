@@ -9,6 +9,7 @@ create/load).
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import Field, field_validator
@@ -21,6 +22,7 @@ from digitalkin.models.services.registry import (
     RegistrySortBy,
     RegistryVisibility,
 )
+from digitalkin.models.settings.services_manager import get_services_manager_settings
 
 if TYPE_CHECKING:
     from digitalkin.community.agno.toolkits.registry.base import RegistryActionCtx
@@ -185,7 +187,21 @@ class SearchAction(RegistryAction):
                     "service row rendered with an empty structure: setup_id=%s",
                     setup.setup_id,
                 )
-            row["structure"] = setup.structure
+            chars = len(json.dumps(setup.structure, ensure_ascii=False))
+            if chars <= get_services_manager_settings().structure_max_chars:
+                row["structure"] = setup.structure
+            else:
+                # A text, never an object, so it cannot be mistaken for a map entry (DEV-949).
+                logger.info(
+                    "service row map too large, replaced by a hint: setup_id=%s entries=%d chars=%d",
+                    setup.setup_id,
+                    len(setup.structure),
+                    chars,
+                )
+                row["structure"] = (
+                    f"Structure too large to show here ({len(setup.structure)} entries, {chars} characters): "
+                    "read it with the structure action, paged."
+                )
         return row
 
 
@@ -268,6 +284,8 @@ class DeleteAction(RegistryAction):
     A setup whose backing module the registry cannot resolve has no knowable type, so every
     other action refuses it. Delete accepts it anyway — otherwise such a record could never be
     removed by anyone.
+
+    Scope: the whole instance (soft delete). Its configuration and versions are not edited.
     """
 
     display_name = "Delete"
@@ -291,7 +309,10 @@ class DeleteAction(RegistryAction):
 
 
 class ChangeVisibilityAction(RegistryAction):
-    """Change who can see and use an instance."""
+    """Change who can see and use an instance.
+
+    Scope: only who can see and use the instance. No new version; the configuration is untouched.
+    """
 
     display_name = "Change visibility"
     action: Literal["change_visibility"] = "change_visibility"
@@ -381,6 +402,8 @@ class SetVersionAction(RegistryAction):
     Takes a ``setup_version_id`` from ``list_versions``; it does not create anything, so
     rolling forward again is just another ``set_version`` on the newer id. Nothing is lost
     either way.
+
+    Scope: only which existing version is active. No version is created or edited.
     """
 
     display_name = "Set version"
