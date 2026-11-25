@@ -4,6 +4,7 @@ Release and migration notes, newest first. Each page lists what a module author 
 
 | Version            | Notes                                                                                                                        |
 |--------------------|------------------------------------------------------------------------------------------------------------------------------|
+| 1.0.7 (unreleased) | [Plain setup content from the registry](1.0.7.md)                                                                            |
 | 1.0.6 (unreleased) | [Tool labels and mission title](1.0.6.md)                                                                                    |
 | 1.0.5 (unreleased) | [AG-UI 1.0](1.0.5.md)                                                                                                        |
 | 1.0.4              | [One canonical file format](1.0.4.md)                                                                                        |

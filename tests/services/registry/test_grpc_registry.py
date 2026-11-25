@@ -1214,3 +1214,20 @@ class TestTagsAndSorting:
         )
 
         assert future.result(timeout=1.0)[0].structure == {}
+
+
+class TestSetupConfig:
+    """The registry hands setup content over as plain Python values."""
+
+    def test_nested_values_are_plain(self) -> None:
+        """Lists and objects inside the content are not left as protobuf containers."""
+        content = {"url": "https://wiki", "items": [{"name": "a", "tags": ["x"]}], "options": {"depth": 2}}
+        config = Struct()
+        config.update(content)
+        descriptor = registry_messages_pb2.SetupDescriptor(id="wiki", name="Wiki", config=config)
+
+        info = GrpcRegistry._proto_to_setup_info(descriptor)
+
+        assert info.config == content
+        assert type(info.config["items"]) is list
+        assert type(info.config["items"][0]) is dict

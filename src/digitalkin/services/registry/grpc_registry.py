@@ -150,7 +150,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             setup_version_id=descriptor.setup_version_id or None,
             setup_version=descriptor.setup_version or None,
             tags=list(descriptor.tags),
-            config=dict(descriptor.config) if descriptor.config else None,
+            # MessageToDict, not dict(): nested lists and objects would stay protobuf containers
+            config=json_format.MessageToDict(descriptor.config) if descriptor.config else None,
         )
 
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
