@@ -47,6 +47,11 @@ class TestPromptCaching:
     def test_claude_models_enable_caching(self) -> None:
         assert SafeLiteLLM.from_spec(_spec("claude-sonnet-5")).enable_prompt_caching is True  # type: ignore[arg-type]
 
+    @pytest.mark.regression
+    def test_a_caller_can_turn_it_off(self) -> None:
+        """A one-shot call (the compaction summary) wrote 960 955 tokens to the cache, never read (DEV-977)."""
+        assert SafeLiteLLM.from_spec(_spec("claude-haiku-5.5"), prompt_caching=False).enable_prompt_caching is False  # type: ignore[arg-type]
+
     def test_non_anthropic_models_do_not(self) -> None:
         assert SafeLiteLLM.from_spec(_spec("gpt-5")).enable_prompt_caching is False  # type: ignore[arg-type]
 
@@ -86,7 +91,7 @@ class TestWiring:
         assert model.extra_body == {"litellm_session_id": "mission-1"}
         assert model.request_params == {
             "drop_params": True,
-            "num_retries": 2,
+            "num_retries": 0,
             "metadata": {CostTrackingLogger.MISSION_METADATA_KEY: "mission-1"},
         }
         assert model.cancel_event is event
@@ -97,7 +102,7 @@ class TestWiring:
 
         assert model.extra_headers == {}
         assert model.extra_body is None
-        assert model.request_params == {"drop_params": True, "num_retries": 2}
+        assert model.request_params == {"drop_params": True, "num_retries": 0}
 
     def test_cost_tracking_is_registered_once(self) -> None:
         SafeLiteLLM.from_spec(_spec("gpt-5"))  # type: ignore[arg-type]

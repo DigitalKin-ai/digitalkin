@@ -1,10 +1,12 @@
-r"""Read a JSON document at the key paths a setup's structure map names.
+r"""Read and edit a JSON document at the key paths a setup's structure map names.
 
 The *structure* is ``{leaf key path: description}``, written by the agent that creates or
 updates a service setup and stored by the backend alongside the content. The SDK does not
 build it and does not judge it: ``clip`` bounds each description's length and nothing else,
 and ``resolve`` reads the paths it names so ``DefaultSetup`` can project content the way the
-backend does for ``GetSetupRequest.structure_key``.
+backend does for ``GetSetupRequest.structure_key``. ``patch``, ``append`` and ``remove`` edit one
+element in the same grammar, for the services manager actions of the same names; ``prune``,
+``misplaced`` and ``forget`` keep the map in step with those edits.
 
 The path grammar is a cross-repo contract: the agent writes it, the backend resolves it
 against stored JSON, and this reads it the same way. Three rules, normative:
@@ -18,6 +20,7 @@ A resolver that splits naively on ``.`` gets the second rule wrong silently, ret
 wrong key or nothing. That is the one real interop risk in the design.
 """
 
+import json
 from typing import Any, ClassVar
 
 from digitalkin.logger import logger
@@ -74,6 +77,377 @@ class JsonStructure:
         return values
 
     @classmethod
+    def canonical(cls, content: Any, path: str) -> str:
+        """Write a list index joined with "." (``items.0.title``) the grammar's way (``items[0].title``).
+
+        Models (Gemini) often index a list that way. The backend resolves only the bracket form, so such a
+        path names nothing there. A digit key becomes an index only where ``content`` holds a list at that
+        point: an object key ``"0"`` stays a key, and so does a digit key below an element that does not
+        exist yet.
+
+        Args:
+            content: The document the path addresses.
+            path: A key path from the model.
+
+        Returns:
+            The path in the grammar's form; ``path`` itself when it has nothing to rewrite or is malformed
+            (the caller's own parse refuses it).
+        """
+        try:
+            segments = cls._decode(path)
+        except ValueError:
+            return path
+        node, rewritten = content, False
+        for position, segment in enumerate(segments):
+            if isinstance(segment, str) and segment.isascii() and segment.isdigit() and isinstance(node, list):
+                segments[position] = int(segment)
+                rewritten = True
+            node = cls._follow(node, [segments[position]])[1]
+        if not rewritten:
+            return path
+        written = cls._encode(segments)
+        # TODO(validate): DOTTED-INDEX a dotted list index from a model is stored and edited in the bracket form
+        logger.info("[VALIDATE DOTTED-INDEX] json structure: read %s as %s", path, written)
+        return written
+
+    @classmethod
+    def patch(cls, content: dict[str, Any], path: str, value: Any) -> None:
+        """Replace, in place, the value at a path that already exists.
+
+        Args:
+            content: The document to edit.
+            path: A key path in the grammar above, naming an existing element.
+            value: The JSON value to put there.
+
+        Raises:
+            ValueError: The path is empty, malformed, or names nothing in ``content``.
+        """
+        segments = cls._target(path)
+        found, parent = cls._follow(content, segments[:-1])
+        if not found or not cls._follow(parent, segments[-1:])[0]:
+            msg = f"{path!r} not found: patch only changes an existing element; use append to add one"
+            raise ValueError(msg)
+        parent[segments[-1]] = value
+
+    @classmethod
+    def append(cls, content: dict[str, Any], path: str, value: Any) -> str:
+        """Add a new element in place: a missing object key, or one more item of a list.
+
+        A path naming a list pushes ``value`` at its end. A path whose tail is missing creates
+        it, along with any missing parent objects. ``content`` is left untouched on refusal.
+
+        Args:
+            content: The document to edit.
+            path: A key path in the grammar above.
+            value: The JSON value to add.
+
+        Returns:
+            The path of the added element, which ``resolve`` reads back.
+
+        Raises:
+            ValueError: The path is empty or malformed, names an existing value that is not a
+                list, or crosses a list index or a non-object that does not exist.
+        """
+        segments = cls._target(path)
+        node: Any = content
+        for position, segment in enumerate(segments):
+            if isinstance(segment, str) and isinstance(node, dict) and segment not in node:
+                rest = segments[position + 1 :]
+                blocking = next((index for index in rest if isinstance(index, int)), None)
+                if blocking is not None:
+                    msg = (
+                        f"cannot add at {path!r}: list index [{blocking}] does not exist "
+                        "and only object keys are created"
+                    )
+                    raise ValueError(msg)
+                for key in reversed(rest):
+                    value = {key: value}
+                node[segment] = value
+                return path
+            found, node = cls._follow(node, [segment])
+            if not found:
+                msg = f"cannot add at {path!r}: {segment!r} does not exist and only object keys are created"
+                raise ValueError(msg)
+        if isinstance(node, list):
+            node.append(value)
+            return f"{path}[{len(node) - 1}]"
+        msg = f"{path!r} already holds a value: append only adds; use patch to change it"
+        raise ValueError(msg)
+
+    @classmethod
+    def remove(cls, content: dict[str, Any], path: str) -> None:
+        """Remove, in place, the element at a path that exists: an object key or a list item.
+
+        Removing a list item moves every later item down one index.
+
+        Args:
+            content: The document to edit.
+            path: A key path in the grammar above, naming an existing element.
+
+        Raises:
+            ValueError: The path is empty, malformed, carries a negative index, or names nothing.
+        """
+        segments = cls._target(path)
+        found, parent = cls._follow(content, segments[:-1])
+        if not found or not cls._follow(parent, segments[-1:])[0]:
+            msg = f"{path!r} not found: nothing to remove"
+            raise ValueError(msg)
+        del parent[segments[-1]]
+
+    @classmethod
+    def place(cls, content: dict[str, Any], path: str, value: Any, at: int | None = None) -> bool:
+        """Write ``value`` at ``path`` in place, whatever is there.
+
+        A list at ``path`` gets ``value`` pushed onto it (each of its items when ``value`` is a
+        list), or inserted at index ``at``; another existing value is replaced; a missing path is
+        created as ``append`` does.
+
+        Args:
+            content: The document to edit.
+            path: A key path in the grammar above.
+            value: The JSON value to write.
+            at: Where to insert in the list at ``path``; ``None`` pushes at its end.
+
+        Returns:
+            ``True`` when an existing value other than a list was replaced.
+
+        Raises:
+            ValueError: The path is malformed or crosses a list index or a non-object that does not exist,
+                or ``at`` is given for a value that is not a list or is out of its bounds.
+        """
+        found, node = cls._walk(content, path)
+        items = value if isinstance(value, list) else [value]
+        if at is not None:
+            if not found or not isinstance(node, list):
+                msg = f"at={at} inserts into a list, and {path!r} holds no list"
+                raise ValueError(msg)
+            if not 0 <= at <= len(node):
+                msg = f"at={at} is outside the list at {path!r} ({len(node)} items)"
+                raise ValueError(msg)
+            node[at:at] = items
+            return False
+        if found and isinstance(node, list):
+            node.extend(items)
+            return False
+        if found:
+            cls.patch(content, path, value)
+            return True
+        cls.append(content, path, value)
+        return False
+
+    @classmethod
+    def fit(cls, text: str, budget: int, *, tail: bool = False) -> int:
+        """Measure the longest start (or end) of ``text`` that fits ``budget`` characters as a JSON string.
+
+        Escapes count (a quote takes two characters, a control character six), and so do the two quotes.
+
+        Args:
+            text: The text to measure.
+            budget: The most JSON characters the piece may take.
+            tail: Measure the end of ``text`` instead of its start.
+
+        Returns:
+            The piece's length in characters, from 0 to ``len(text)``.
+        """
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            piece = text[len(text) - middle :] if tail else text[:middle]
+            if len(json.dumps(piece, ensure_ascii=False)) <= budget:
+                low = middle
+            else:
+                high = middle - 1
+        return low
+
+    @classmethod
+    def nested(cls, paths: list[str]) -> tuple[str, str] | None:
+        """Find two paths where one names an element inside the other.
+
+        Args:
+            paths: Key paths in the grammar above.
+
+        Returns:
+            The first ``(outer, inner)`` pair found, or ``None``; equal paths are not nested.
+
+        Raises:
+            ValueError: A path is empty, malformed, or carries a negative list index.
+        """
+        decoded = [(path, cls._target(path)) for path in paths]
+        for outer, branch in decoded:
+            for inner, segments in decoded:
+                if len(segments) > len(branch) and segments[: len(branch)] == branch:
+                    return outer, inner
+        return None
+
+    @classmethod
+    def page(
+        cls, value: list[Any] | dict[str, Any], offset: int, limit: int | None, budget: int
+    ) -> tuple[list[Any] | dict[str, Any], int | None]:
+        """Cut one page out of a list or an object (its keys sorted).
+
+        A page holds items from ``offset`` while there are fewer than ``limit`` and its JSON stays
+        within ``budget`` characters; it always holds one item when one remains, so paging progresses
+        even past an item larger than the budget. An object is paged in sorted key order: a protobuf
+        Struct comes back in a different key order from one read to the next, so a position in its
+        stored order would skip or repeat keys across pages.
+
+        Args:
+            value: The list or object to page.
+            offset: The first item of the page.
+            limit: The most items the page may hold; ``None`` for as many as fit.
+            budget: The most JSON characters a page may take.
+
+        Returns:
+            The page, of the same type as ``value``, and the offset of the next page, ``None`` after the last.
+        """
+        items = sorted(value.items()) if isinstance(value, dict) else value
+        last = len(items) if limit is None else min(len(items), offset + limit)
+        end, used = offset, 2
+        for item in items[offset:last]:
+            size = (
+                len(json.dumps(item[0], ensure_ascii=False)) + 2 + len(json.dumps(item[1], ensure_ascii=False))
+                if isinstance(value, dict)
+                else len(json.dumps(item, ensure_ascii=False))
+            )
+            used += size + 2 * (end > offset)
+            if used > budget and end > offset:
+                break
+            end += 1
+        page = dict(items[offset:end]) if isinstance(value, dict) else items[offset:end]
+        return page, end if end < len(items) else None
+
+    @classmethod
+    def child(cls, path: str | None, segment: str | int) -> str:
+        """Name the element ``segment`` under ``path`` in the path grammar.
+
+        Args:
+            path: The parent's key path; ``None`` for the document root.
+            segment: An object key or a list index.
+
+        Returns:
+            The child's key path, its key bracket-quoted when the grammar requires it.
+        """
+        return cls._encode([*cls._decode(path), segment] if path else [segment])
+
+    @classmethod
+    def forget(cls, structure: dict[str, str], path: str) -> dict[str, str]:
+        """Update a map for the removal of the element at ``path``.
+
+        The element's entries are dropped (:meth:`prune`). When it was a list item, the entries
+        of the later items of that list move down one index, as the items did; each renamed
+        entry is logged. A stored entry that cannot be parsed is kept as is.
+
+        Args:
+            structure: The stored map; left untouched.
+            path: A key path in the grammar above, naming the removed element.
+
+        Returns:
+            The map describing the content after the removal.
+
+        Raises:
+            ValueError: ``path`` is empty, malformed, or carries a negative list index.
+        """
+        branch = cls._target(path)
+        kept = cls.prune(structure, path)
+        removed = branch[-1]
+        if not isinstance(removed, int):
+            return kept
+        depth = len(branch) - 1
+        forgotten: dict[str, str] = {}
+        for entry, text in kept.items():
+            try:
+                segments = cls._decode(entry)
+            except ValueError:
+                forgotten[entry] = text
+                continue
+            index = segments[depth] if len(segments) > depth else None
+            if segments[:depth] != branch[:depth] or not isinstance(index, int) or index <= removed:
+                forgotten[entry] = text
+                continue
+            segments[depth] = index - 1
+            renamed = cls._encode(segments)
+            logger.info("json structure: renamed %s to %s after removing %s", entry, renamed, path)
+            forgotten[renamed] = text
+        return forgotten
+
+    @classmethod
+    def _encode(cls, segments: list[str | int]) -> str:
+        """Write segments back as a path, quoting the keys the grammar requires quoted.
+
+        Args:
+            segments: Object keys and list indices, in order.
+
+        Returns:
+            The path, which :meth:`_decode` reads back into ``segments``.
+        """
+        path = ""
+        for segment in segments:
+            if isinstance(segment, int):
+                path += f"[{segment}]"
+            elif segment and not set(segment) & set('.[]"\\'):
+                path += f".{segment}" if path else segment
+            else:
+                path += '["' + segment.replace("\\", "\\\\").replace('"', '\\"') + '"]'
+        return path
+
+    @classmethod
+    def prune(cls, structure: dict[str, str], path: str) -> dict[str, str]:
+        """Drop the map entries describing the element at ``path``: itself and everything under it.
+
+        Called before an edit's own entries go in, so the map never keeps describing what the
+        edit replaced. Entries are compared segment by segment, so ``["llm"].model`` is under
+        ``llm``. A stored entry that cannot be parsed is kept: the map is never judged.
+
+        Args:
+            structure: The stored map; left untouched.
+            path: A key path in the grammar above, naming the edited element.
+
+        Returns:
+            The entries outside that element.
+
+        Raises:
+            ValueError: ``path`` is empty, malformed, or carries a negative list index.
+        """
+        branch = cls._target(path)
+        kept: dict[str, str] = {}
+        for entry, text in structure.items():
+            try:
+                under = cls._decode(entry)[: len(branch)] == branch
+            except ValueError:
+                under = False
+            if under:
+                logger.info("json structure: dropped %s (%s), described again by the edit of %s", entry, text, path)
+            else:
+                kept[entry] = text
+        return kept
+
+    @classmethod
+    def misplaced(cls, entries: dict[str, str], content: dict[str, Any], path: str) -> list[str]:
+        """List the entries that do not describe the element written at ``path``.
+
+        An edit's entries must name that element or something inside it, and resolve in the
+        edited content. Anything else would describe another element — an item pushed onto a
+        list lands at an index the caller may have guessed wrong — or a key that is not there.
+
+        Args:
+            entries: The map entries the edit carries.
+            content: The edited document.
+            path: The path of the written element.
+
+        Returns:
+            The misplaced entry paths, in order; empty when every entry is in place.
+
+        Raises:
+            ValueError: ``path`` or an entry is empty, malformed, or carries a negative list index.
+        """
+        branch = cls._target(path)
+        return [
+            entry
+            for entry in entries
+            if cls._decode(entry)[: len(branch)] != branch or not cls._walk(content, entry)[0]
+        ]
+
+    @classmethod
     def _walk(cls, content: dict[str, Any], path: str) -> tuple[bool, Any]:
         """Follow one path through a document.
 
@@ -84,8 +458,20 @@ class JsonStructure:
         Returns:
             ``(True, value)`` when the path resolves, ``(False, None)`` when it does not.
         """
-        node: Any = content
-        for segment in cls._decode(path):
+        return cls._follow(content, cls._decode(path))
+
+    @classmethod
+    def _follow(cls, node: Any, segments: list[str | int]) -> tuple[bool, Any]:
+        """Follow decoded segments from ``node``.
+
+        Args:
+            node: Where to start.
+            segments: Object keys and list indices, in order.
+
+        Returns:
+            ``(True, value)`` when every segment resolves, ``(False, None)`` otherwise.
+        """
+        for segment in segments:
             if isinstance(segment, int):
                 if not isinstance(node, list) or not -len(node) <= segment < len(node):
                     return False, None
@@ -95,6 +481,31 @@ class JsonStructure:
             else:
                 return False, None
         return True, node
+
+    @classmethod
+    def _target(cls, path: str) -> list[str | int]:
+        """Decode the path of an element to edit, refusing the empty one and negative indices.
+
+        An edited path also keys the structure map, where ``tools[-1]`` would never match the
+        ``tools[1]`` entry describing the same item, so only positions counted from 0 are taken.
+
+        Args:
+            path: A key path in the grammar above.
+
+        Returns:
+            The segments, at least one.
+
+        Raises:
+            ValueError: The path is empty, malformed, or carries a negative list index.
+        """
+        segments = cls._decode(path)
+        if not segments:
+            msg = "empty path: name the element to edit (replacing the whole document is update's job)"
+            raise ValueError(msg)
+        if any(isinstance(segment, int) and segment < 0 for segment in segments):
+            msg = f"negative list index in {path!r}: give the item's position counted from 0"
+            raise ValueError(msg)
+        return segments
 
     @classmethod
     def _decode(cls, path: str) -> list[str | int]:

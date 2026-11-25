@@ -2,10 +2,13 @@
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 from agno.agent import Agent
+from agno.team import Team
 
 from digitalkin.community.agno import AguiTools
+from digitalkin.community.agno.safe_litellm import SafeLiteLLM
 from digitalkin.community.agno.toolkits import (
     ChatHistoryTools,
     DefaultToolkits,
@@ -98,3 +101,49 @@ def test_bind_host_keeps_the_factory_binding() -> None:
     DefaultToolkits.bind_host(tools, agent)
     assert tools[-1]._base_tools is tools  # type: ignore[union-attr]
     assert tools[0].host is agent  # type: ignore[union-attr]
+
+
+class TestServicesWriter:
+    """``bind_host`` hands the host's model to ``services_manager`` as the ``generate`` writer (DEV-938)."""
+
+    @staticmethod
+    def _manager(tools: list[Any]) -> ServicesManager:
+        return next(tool for tool in tools if isinstance(tool, ServicesManager))
+
+    def test_the_agent_model_becomes_a_separate_writer(self) -> None:
+        tools = DefaultToolkits.build(_context(setup=DefaultSetup()), chat_history=False)  # type: ignore[arg-type]
+        model = SafeLiteLLM(id="agent-model")
+
+        DefaultToolkits.bind_host(tools, Agent(model=model, tools=tools))
+
+        writer = self._manager(tools)._ctx_data.writer
+        assert isinstance(writer, SafeLiteLLM)
+        assert writer.id == "agent-model"
+        assert writer is not model
+
+    def test_a_team_hands_its_own_model(self) -> None:
+        tools = DefaultToolkits.build(_context(setup=DefaultSetup()), chat_history=False)  # type: ignore[arg-type]
+
+        DefaultToolkits.bind_host(tools, Team(members=[], model=SafeLiteLLM(id="team-model")))
+
+        writer = self._manager(tools)._ctx_data.writer
+        assert writer is not None
+        assert writer.id == "team-model"
+
+    def test_the_writer_never_compacts(self) -> None:
+        tools = DefaultToolkits.build(_context(setup=DefaultSetup()), chat_history=False)  # type: ignore[arg-type]
+        model = SafeLiteLLM(id="agent-model", compactor=Mock())
+
+        DefaultToolkits.bind_host(tools, Agent(model=model, tools=tools))
+
+        writer = self._manager(tools)._ctx_data.writer
+        assert isinstance(writer, SafeLiteLLM)
+        assert writer.compactor is None
+        assert model.compactor is not None
+
+    def test_a_host_without_a_model_leaves_no_writer(self) -> None:
+        tools = DefaultToolkits.build(_context(setup=DefaultSetup()), chat_history=False)  # type: ignore[arg-type]
+
+        DefaultToolkits.bind_host(tools, object())
+
+        assert self._manager(tools)._ctx_data.writer is None

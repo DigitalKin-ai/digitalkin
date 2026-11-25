@@ -39,7 +39,7 @@ class ModuleToolkits:
             if info is None:
                 logger.warning("No tool found in cache for setup_id='%s'", selection.setup_id)
                 continue
-            allowed = {name for name, enabled in selection.triggers.items() if enabled}
+            allowed = selection.enabled([tool.name for tool in info.tools])
             if not allowed:
                 logger.info("All triggers disabled for setup_id='%s', skipping", selection.setup_id)
                 continue

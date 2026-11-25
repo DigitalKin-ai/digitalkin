@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from digitalkin.community.agno.safe_litellm import SafeLiteLLM
 from digitalkin.community.agno.toolkits.registry.base import RegistryObjectToolKit
 
 # Runtime import (not TYPE_CHECKING): the union is passed to the base as ``actions=`` to build the
@@ -12,13 +15,15 @@ from digitalkin.community.agno.toolkits.registry.services.action import ServiceA
 from digitalkin.models.services.registry import RegistryModuleType
 
 if TYPE_CHECKING:
+    from agno.models.base import Model
+
     from digitalkin.models.module import ModuleContext
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
     from digitalkin.services.setup.setup_strategy import SetupStrategy
 
 
 class ServicesManager(RegistryObjectToolKit):
-    """Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions."""
+    """Manage Service setups (SERVICE): CRUD, structure reads, load, edits, update_structure, generate."""
 
     module_type: ClassVar[RegistryModuleType] = RegistryModuleType.SERVICE
 
@@ -37,16 +42,45 @@ class ServicesManager(RegistryObjectToolKit):
             name="services_manager",
             actions=ServiceActions,
             description=(
-                "Manage Service SETUPS: create, search, structure, load, update, delete, "
-                "change_visibility, plus list_versions / set_version to inspect the configuration "
-                "history and undo a bad update. The action discriminator selects the operation. "
+                "Manage Service SETUPS: create, search, get, structure, search_structure, load, update, patch, "
+                "append, remove, update_structure, generate, delete, change_visibility, plus list_versions / "
+                "set_version to inspect the configuration history and undo a bad update. The action discriminator "
+                "selects the operation. To change one element use 'patch' (the path must exist), to "
+                "add use 'append' (a new key, one more item of a list, several items at once with "
+                "'items', or a text added at the end of an existing text), and to take one out use "
+                "'remove' (a key or a list item; 'delete' removes the whole service). patch and "
+                "append take a key path, a value (or items) and the structure entries describing "
+                "what they write; remove takes only the path and updates the map itself. All three "
+                "keep the rest of the configuration, its documentation and the map entries outside "
+                "the edited element, and cut a new version. To complete or correct the structure map "
+                "without touching the configuration use 'update_structure': its entries are merged into the map "
+                "(an empty description removes one); send a large map in batches of about 100 entries. "
+                "Use 'update' only to rewrite the whole "
+                "configuration. Every write answers a short receipt — setup_id, the new "
+                "setup_version_id and version, the written path (an appended list item's index, the "
+                "last one for items) and the saved size — never the configuration. "
+                "LARGE configurations: one call carries about 20 000 characters at most. To build or "
+                "extend anything larger, 'create' a small skeleton, then call 'generate' once with a "
+                "brief and one section per part (each under about 15 000 characters, e.g. 12 catalog "
+                "items): the tool writes every section itself, in parallel, and saves them as one "
+                "version. It can take several minutes. Its receipt lists each written section and "
+                "each failed one with its index and instructions: call generate again with only the "
+                "failed ones, without loading the service to find them. "
                 "Configurations can be large, so read them in two steps: 'search' returns each "
                 "result with a 'structure' map of key path -> what lives there ('structure' fetches "
                 "the same map for an id you already hold), then 'load' with a key copied verbatim "
                 "from it returns just that part. Copy the key, never invent one: a key the "
-                "configuration does not have fails with not found. Load without a key only when "
-                "the whole document is genuinely needed. On create and update you write that map "
-                "yourself, describing what "
+                "configuration does not have fails with not found. A map or a part too large to return "
+                "whole is REFUSED with its size until you page it: 'load' takes offset and limit (a list "
+                "by items, an object by keys, a text by characters; a text page ends on a sentence or a "
+                "word, repeats the end of the previous page at its start, and its 'part' says which "
+                "characters it holds), 'structure' takes offset and limit "
+                "(entries sorted by key path) and a prefix to read one branch, and 'search_structure' "
+                "finds map entries by the words of their path or description. A search row shows a "
+                "text instead of a map too large to show. 'get' answers the name, documentation, "
+                "version and map without the configuration; it refuses a map too large to return, then "
+                "call it with structure=false. Every action that writes content (create, "
+                "update, patch, append) requires that map: you write it yourself, describing what "
                 "each key is for — it is how other agents find their way around the configuration."
             ),
             entrypoint=self.services_manager,
@@ -54,7 +88,7 @@ class ServicesManager(RegistryObjectToolKit):
         )
 
     async def services_manager(self, action: ServiceActions | None = None, **fields: Any) -> str:
-        """Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
+        """Dispatch a Service operation (create, search, structure, search_structure, load, update, patch, append, ...).
 
         Args:
             action: A discriminated Service action; its type selects the operation.
@@ -65,3 +99,18 @@ class ServicesManager(RegistryObjectToolKit):
             The canonical success envelope, or a fail envelope on rejection/invalid input.
         """
         return await self._run(action, **fields)
+
+    def bind_writer(self, model: Model) -> None:
+        """Take a copy of ``model`` as the writer of ``generate`` sections.
+
+        A copy, so a section never shares the agent's per-request state, and without the agent's
+        history compactor: a section request carries no history. Every other setting, reasoning
+        included, stays the agent's.
+
+        Args:
+            model: The model of the agent or team this toolkit serves.
+        """
+        writer = copy.copy(model)
+        if isinstance(writer, SafeLiteLLM):
+            writer.compactor = None
+        self._ctx_data = dataclasses.replace(self._ctx_data, writer=writer)

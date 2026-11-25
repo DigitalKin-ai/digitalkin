@@ -1,14 +1,20 @@
 """Tests for the Registry Toolkit managers — Tools / Services / Kins via ``manage_*`` dispatch."""
 
+import asyncio
 import datetime as dt
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from agno.exceptions import RunCancelledException
+from agno.models.message import Message
+from agno.models.response import ModelResponse
 from pydantic import ValidationError
 
+from digitalkin.community.agno.safe_litellm import SafeLiteLLM
 from digitalkin.community.agno.toolkits import KinsManager, ServicesManager, ToolsManager
 from digitalkin.community.agno.toolkits.registry.action import (
     ChangeVisibilityAction,
@@ -20,10 +26,19 @@ from digitalkin.community.agno.toolkits.registry.action import (
     UpdateAction,
 )
 from digitalkin.community.agno.toolkits.registry.services.action import (
+    AppendServiceAction,
     CreateServiceAction,
+    GenerateServiceAction,
+    GetServiceAction,
     LoadServiceAction,
+    PatchServiceAction,
+    RemoveServiceAction,
+    SearchStructureServiceAction,
+    ServiceSection,
+    SetServiceVersionAction,
     StructureServiceAction,
     UpdateServiceAction,
+    UpdateStructureServiceAction,
 )
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.services.registry import (
@@ -116,6 +131,47 @@ class TestExposedSurface:
         assert set(ToolsManager(setup, reg).async_functions) == {"tools_manager"}
         assert set(ServicesManager(setup, reg).async_functions) == {"services_manager"}
         assert set(KinsManager(setup, reg).async_functions) == {"kins_manager"}
+
+    def test_services_schema_exposes_the_large_service_fields(self) -> None:
+        """DEV-938: generate, append items, paged load; the model reads these from the schema."""
+        schema = json.dumps(ServicesManager(*_stores()).async_functions["services_manager"].parameters)
+        defs = json.loads(schema)["$defs"]
+
+        assert "GenerateServiceAction" in defs
+        assert defs["AppendServiceAction"]["properties"]["items"]["anyOf"][0]["type"] == "array"
+        assert {"offset", "limit"} <= set(defs["LoadServiceAction"]["properties"])
+        assert "generate" in ServicesManager(*_stores()).async_functions["services_manager"].description  # type: ignore[operator]
+
+    def test_services_schema_exposes_the_size_aware_reads(self) -> None:
+        """DEV-949: get's structure flag, structure paging and search_structure reach the model."""
+        function = ServicesManager(*_stores()).async_functions["services_manager"]
+        defs = json.loads(json.dumps(function.parameters))["$defs"]
+
+        assert "SearchStructureServiceAction" in defs
+        assert {"prefix", "offset", "limit"} <= set(defs["StructureServiceAction"]["properties"])
+        assert "structure" in defs["GetServiceAction"]["properties"]
+        assert "search_structure" in function.description
+
+    def test_every_write_states_its_scope(self) -> None:
+        """The model reads, for each write, which part of the service it changes and which it keeps."""
+        defs = json.loads(json.dumps(ServicesManager(*_stores()).async_functions["services_manager"].parameters))[
+            "$defs"
+        ]
+        writes = [
+            "CreateServiceAction",
+            "UpdateServiceAction",
+            "PatchServiceAction",
+            "AppendServiceAction",
+            "RemoveServiceAction",
+            "UpdateStructureServiceAction",
+            "GenerateServiceAction",
+            "DeleteAction",
+            "ChangeVisibilityAction",
+            "SetServiceVersionAction",
+        ]
+
+        assert [name for name in writes if "Scope:" not in defs[name]["description"]] == []
+        assert "only the structure map" in defs["UpdateStructureServiceAction"]["description"]
 
     def test_tool_schema_exposes_the_action_union_without_validate_call(self) -> None:
         # The explicit schema keeps the discriminated union for the LLM; skip_entrypoint_processing
@@ -258,7 +314,7 @@ class TestSearchStatusFilter:
 
 class TestGetAndLoad:
     async def test_get_returns_the_matching_object_type(self) -> None:
-        env = _env(await ServicesManager(*_stores()).services_manager(GetAction(setup_id="setups:nikita")))
+        env = _env(await ServicesManager(*_stores()).services_manager(GetServiceAction(setup_id="setups:nikita")))
         assert env["metadata"]["tool"] == "get"
         assert env["output"]["id"] == "setups:nikita"
 
@@ -280,8 +336,8 @@ class TestServiceCreateAndLoad:
             )
         )
         assert env["metadata"]["tool"] == "create"
-        assert env["output"]["name"] == "Nikita"
-        assert env["output"]["current_setup_version"]["content"] == {"branding": True}
+        assert not env["output"]["path"]
+        assert env["output"]["content_chars"] == len('{"branding": true}')
 
     async def test_create_then_load_round_trips(self) -> None:
         svc = ServicesManager(*_stores())
@@ -292,7 +348,7 @@ class TestServiceCreateAndLoad:
                 )
             )
         )
-        env = _env(await svc.services_manager(LoadServiceAction(setup_id=created["output"]["id"])))
+        env = _env(await svc.services_manager(LoadServiceAction(setup_id=created["output"]["setup_id"])))
         assert env["output"] == {"branding": True}
 
 
@@ -304,13 +360,15 @@ class TestCrudRoundTrip:
         created = _env(
             await svc.services_manager(CreateServiceAction(name="X", content={"a": 1}, structure={"a": "the a knob"}))
         )
-        setup_id = created["output"]["id"]
+        setup_id = created["output"]["setup_id"]
 
         updated = _env(
-            await svc.services_manager(UpdateServiceAction(setup_id=setup_id, name="renamed", content={"a": 2}))
+            await svc.services_manager(
+                UpdateServiceAction(setup_id=setup_id, name="renamed", content={"a": 2}, structure={})
+            )
         )
         assert updated["metadata"]["tool"] == "update"
-        assert updated["output"]["name"] == "renamed"
+        assert _env(await svc.services_manager(GetServiceAction(setup_id=setup_id)))["output"]["name"] == "renamed"
 
         shared = _env(await svc.services_manager(ChangeVisibilityAction(setup_id=setup_id, visibility="internal")))
         assert shared["output"]["visibility"] == "internal"
@@ -326,7 +384,9 @@ class TestServiceContentIsFreeForm:
         ctx = SimpleNamespace(get_module_config_schema=AsyncMock(return_value={}), callbacks=SimpleNamespace())
         mgr = ServicesManager(*_stores(), context=ctx)  # type: ignore[arg-type]
         env = _env(
-            await mgr.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="x", content={"free": 1}))
+            await mgr.services_manager(
+                UpdateServiceAction(setup_id="setups:nikita", name="x", content={"free": 1}, structure={})
+            )
         )
         assert env["metadata"]["success"] is True
         ctx.get_module_config_schema.assert_not_awaited()
@@ -648,7 +708,9 @@ class TestDeletedResourceIsFrozen:
         svc = ServicesManager(*_stores())
         assert _env(await svc.services_manager(DeleteAction(setup_id="setups:nikita")))["output"] is True
         env = _env(
-            await svc.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}))
+            await svc.services_manager(
+                UpdateServiceAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}, structure={})
+            )
         )
         assert env["metadata"]["success"] is False
         assert env["metadata"]["tool"] == "update"
@@ -1146,7 +1208,8 @@ class TestAuthoredStructure:
     """The agent writes the key map; the SDK stores it verbatim and judges nothing."""
 
     async def test_create_stores_the_authored_summaries(self) -> None:
-        svc = ServicesManager(*_stores())
+        setup, registry = _stores()
+        svc = ServicesManager(setup, registry)
         authored = {"llm.provider": "which backend routes the call", "region": "where it runs"}
 
         env = _env(
@@ -1159,59 +1222,61 @@ class TestAuthoredStructure:
             )
         )
 
-        assert env["output"]["current_setup_version"]["structure"] == authored
+        assert setup.setups[env["output"]["setup_id"]].current_setup_version.structure == authored
 
     async def test_a_map_is_stored_unjudged(self) -> None:
         """An entry naming a key the content lacks is still stored — we do not vet the map."""
-        svc = ServicesManager(*_stores())
+        setup, registry = _stores()
+        svc = ServicesManager(setup, registry)
         authored = {"region": "where it runs", "llm.provider": "not in this document"}
 
         env = _env(
             await svc.services_manager(CreateServiceAction(name="N", content={"region": "eu-west"}, structure=authored))
         )
 
-        assert env["output"]["current_setup_version"]["structure"] == authored
+        assert setup.setups[env["output"]["setup_id"]].current_setup_version.structure == authored
 
     async def test_update_replaces_the_map_with_the_one_supplied(self) -> None:
-        svc = ServicesManager(*_stores())
+        setup, registry = _stores()
+        svc = ServicesManager(setup, registry)
         created = _env(
             await svc.services_manager(
                 CreateServiceAction(name="N", content={"a": "one"}, structure={"a": "the a knob"})
             )
         )
 
-        updated = _env(
-            await svc.services_manager(
-                UpdateServiceAction(
-                    setup_id=created["output"]["id"],
-                    name="N",
-                    content={"a": "two", "b": "new"},
-                    structure={"a": "the a knob", "b": "the b knob"},
-                )
+        setup_id = created["output"]["setup_id"]
+        await svc.services_manager(
+            UpdateServiceAction(
+                setup_id=setup_id,
+                name="N",
+                content={"a": "two", "b": "new"},
+                structure={"a": "the a knob", "b": "the b knob"},
             )
         )
 
-        assert updated["output"]["current_setup_version"]["structure"] == {
+        assert setup.setups[setup_id].current_setup_version.structure == {
             "a": "the a knob",
             "b": "the b knob",
         }
 
-    async def test_update_without_a_map_leaves_the_new_revision_without_one(self) -> None:
-        """The map belongs to the content, so a revision carries only what its call supplied."""
-        svc = ServicesManager(*_stores())
-        created = _env(
-            await svc.services_manager(
-                CreateServiceAction(name="N", content={"a": "one"}, structure={"a": "the a knob"})
-            )
+    def test_update_requires_a_structure(self) -> None:
+        """Like create: an update rewrites the whole content, so it must describe it."""
+        with pytest.raises(ValidationError, match="structure"):
+            UpdateServiceAction(setup_id="setups:x", name="N", content={"a": "two"})  # type: ignore[call-arg]
+
+    async def test_a_raw_update_without_a_structure_fails_cleanly(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager({
+                "action": "update",
+                "setup_id": "setups:nikita",
+                "name": "N",
+                "content": {"a": "two"},
+            })
         )
 
-        updated = _env(
-            await svc.services_manager(
-                UpdateServiceAction(setup_id=created["output"]["id"], name="N", content={"a": "two"})
-            )
-        )
-
-        assert updated["output"]["current_setup_version"]["structure"] == {}
+        assert env["metadata"]["success"] is False
+        assert "structure" in env["error"]
 
     def test_create_requires_a_structure(self) -> None:
         with pytest.raises(ValidationError):
@@ -1239,7 +1304,7 @@ class TestScopedRead:
                 )
             )
         )
-        return svc, created["output"]["id"]
+        return svc, created["output"]["setup_id"]
 
     async def test_load_with_a_key_returns_only_that_key(self) -> None:
         """The read is narrowed at the setup service, so the response carries just the key."""
@@ -1306,7 +1371,7 @@ class TestScopedRead:
         """Regression (QA D1): ``get`` showed ``{}`` over a 7-key map; the setup version now carries it."""
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
 
-        got = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+        got = _env(await svc.services_manager(GetServiceAction(setup_id=setup_id)))
         shape = _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))
 
         assert got["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
@@ -1317,23 +1382,22 @@ class TestScopedRead:
         """Regression (QA D1 replay): omitting the key moved D7's KeyError from search to get."""
         svc, setup_id = await self._service_indexed({})
 
-        env = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+        env = _env(await svc.services_manager(GetServiceAction(setup_id=setup_id)))
 
         assert env["output"]["current_setup_version"]["structure"] == {}
 
     @pytest.mark.regression
     async def test_set_version_serves_the_structure(self) -> None:
-        """Regression (QA D1): the version a SetCurrentSetupVersion returns carries its map too."""
+        """Regression (QA D1): the version a set_version activates serves its map too."""
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
         versions = _env(await svc.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["versions"]
 
-        env = _env(
-            await svc.services_manager(
-                SetVersionAction(setup_id=setup_id, setup_version_id=versions[0]["setup_version_id"])
-            )
+        await svc.services_manager(
+            SetServiceVersionAction(setup_id=setup_id, setup_version_id=versions[0]["setup_version_id"])
         )
 
-        assert env["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
+        env = _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))
+        assert env["output"] == {"llm.model": "which model answers"}
 
     async def test_change_visibility_serves_the_structure(self) -> None:
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
@@ -1380,15 +1444,17 @@ class TestScopedRead:
         assert _env(raw)["output"] == {"llm.model": "which model answers"}
         assert "gpt-4o" not in raw
 
-    async def test_structure_is_empty_when_the_search_summary_carries_none(self) -> None:
-        """It reads the stored map, so an unpopulated summary yields {} — never a derived map.
+    async def test_structure_reads_the_version_not_the_search_index(self) -> None:
+        """The map comes from the current version, so a search summary that lags or carries none does not matter.
 
-        The setup itself was created WITH a map here; DefaultRegistry mirrors none, which is
-        exactly the legacy/backfill-pending case on the wire.
+        DefaultRegistry mirrors no map, which is the legacy/backfill-pending case on the wire (DEV-949).
         """
         svc, setup_id = await self._service()
 
-        assert _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))["output"] == {}
+        assert _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))["output"] == {
+            "llm.model": "which model answers",
+            "region": "where it runs",
+        }
 
     async def test_structure_refuses_another_object_type(self) -> None:
         """The type gate applies to the shape read as much as to the content read."""
@@ -1396,6 +1462,252 @@ class TestScopedRead:
 
         assert json.loads(raw)["metadata"]["success"] is False
         assert "not a service setup" in json.loads(raw)["error"]
+
+
+class TestStructurePaging:
+    """``structure`` pages a large map, narrows it to a branch, and refuses it whole over the limit (DEV-949)."""
+
+    @staticmethod
+    async def _service(structure: dict[str, str] | None) -> tuple[ServicesManager, str]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": structure})
+        return ServicesManager(setup, registry), created.id
+
+    @staticmethod
+    async def _structure(manager: ServicesManager, setup_id: str, **fields: Any) -> dict[str, Any]:
+        return _env(await manager.services_manager(StructureServiceAction(setup_id=setup_id, **fields)))
+
+    @staticmethod
+    def _big_map() -> dict[str, str]:
+        return {f"items[{index}].name": "x" * 40 for index in reversed(range(100))}
+
+    async def test_a_large_map_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service(self._big_map())
+
+        env = await self._structure(manager, setup_id)
+
+        assert env["metadata"]["success"] is False
+        assert "100 entries" in env["error"]
+        assert "offset and limit" in env["error"]
+        assert "search_structure" in env["error"]
+
+    async def test_pages_entries_sorted_by_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service({"b": "second", "a": "first", "c": "third"})
+
+        output = (await self._structure(manager, setup_id, offset=0, limit=2))["output"]
+
+        assert output == {"entries": {"a": "first", "b": "second"}, "offset": 0, "total": 3, "next_offset": 2}
+        assert list(output["entries"]) == ["a", "b"]
+
+    async def test_a_page_stays_within_the_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+        manager, setup_id = await self._service(self._big_map())
+
+        output = (await self._structure(manager, setup_id, offset=0))["output"]
+
+        assert 0 < len(output["entries"]) < 100
+        assert len(json.dumps(output["entries"])) <= 1000
+        assert output["total"] == 100
+        assert output["next_offset"] == len(output["entries"])
+
+    async def test_prefix_keeps_one_branch(self) -> None:
+        manager, setup_id = await self._service({"a": "1", "a.b": "2", "a[0]": "3", "ab": "4", 'a["x.y"]': "5"})
+
+        output = (await self._structure(manager, setup_id, prefix="a"))["output"]
+
+        assert output == {"a": "1", "a.b": "2", "a[0]": "3", 'a["x.y"]': "5"}
+
+    async def test_prefix_pages_its_branch(self) -> None:
+        manager, setup_id = await self._service({"a.c": "1", "a.b": "2", "z": "3"})
+
+        output = (await self._structure(manager, setup_id, prefix="a", offset=1))["output"]
+
+        assert output == {"entries": {"a.c": "1"}, "offset": 1, "total": 2, "next_offset": None}
+
+    async def test_prefix_matching_nothing_answers_an_empty_map(self) -> None:
+        manager, setup_id = await self._service({"a": "1"})
+
+        assert (await self._structure(manager, setup_id, prefix="zz"))["output"] == {}
+
+    async def test_a_version_without_a_map_answers_an_empty_map(self) -> None:
+        manager, setup_id = await self._service(None)
+
+        assert (await self._structure(manager, setup_id))["output"] == {}
+        assert (await self._structure(manager, setup_id, offset=0))["output"] == {
+            "entries": {},
+            "offset": 0,
+            "total": 0,
+            "next_offset": None,
+        }
+
+    async def test_a_small_map_is_unchanged(self) -> None:
+        manager, setup_id = await self._service({"b": "2", "a": "1"})
+
+        assert list((await self._structure(manager, setup_id))["output"].items()) == [("b", "2"), ("a", "1")]
+
+
+class TestSearchStructure:
+    """``search_structure`` finds map entries by the words of their path or description, paged (DEV-949)."""
+
+    _MAP: ClassVar[dict[str, str]] = {
+        "catalog.products[0].sku": "P001 drill",
+        "catalog.products[1].sku": "P002 hammer",
+        "catalog.title": "Shop name",
+        "pricing.currency": "Currency of every price, EUR",
+    }
+
+    @staticmethod
+    async def _search(query: str, **fields: Any) -> dict[str, Any]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": TestSearchStructure._MAP})
+        manager = ServicesManager(setup, registry)
+        return _env(
+            await manager.services_manager(SearchStructureServiceAction(setup_id=created.id, query=query, **fields))
+        )
+
+    async def test_finds_an_entry_by_a_word_of_its_path(self) -> None:
+        output = (await self._search("currency"))["output"]
+
+        assert output == {
+            "entries": {"pricing.currency": "Currency of every price, EUR"},
+            "offset": 0,
+            "total": 1,
+            "next_offset": None,
+        }
+
+    async def test_finds_an_entry_by_a_word_of_its_description(self) -> None:
+        assert (await self._search("hammer"))["output"]["entries"] == {"catalog.products[1].sku": "P002 hammer"}
+
+    async def test_every_word_must_match(self) -> None:
+        assert list((await self._search("catalog sku P001"))["output"]["entries"]) == ["catalog.products[0].sku"]
+
+    async def test_is_case_insensitive(self) -> None:
+        assert list((await self._search("SHOP"))["output"]["entries"]) == ["catalog.title"]
+
+    async def test_results_are_paged_and_sorted_by_path(self) -> None:
+        output = (await self._search("catalog", offset=1, limit=1))["output"]
+
+        assert output == {
+            "entries": {"catalog.products[1].sku": "P002 hammer"},
+            "offset": 1,
+            "total": 3,
+            "next_offset": 2,
+        }
+
+    async def test_no_match_is_an_empty_page(self) -> None:
+        assert (await self._search("nothing-like-this"))["output"] == {
+            "entries": {},
+            "offset": 0,
+            "total": 0,
+            "next_offset": None,
+        }
+
+    async def test_a_query_without_a_word_is_refused(self) -> None:
+        """A blank query would match every entry; the model sends JSON, so it is refused as an invalid action."""
+        raw = await ServicesManager(*_stores()).services_manager(
+            action={"action": "search_structure", "setup_id": "setups:x", "query": "   "}  # type: ignore[arg-type]
+        )
+
+        assert json.loads(raw)["metadata"]["success"] is False
+        assert "query" in json.loads(raw)["error"]
+
+    async def test_refuses_a_tool_setup(self) -> None:
+        raw = await ServicesManager(*_stores()).services_manager(
+            SearchStructureServiceAction(setup_id="setups:duda", query="x")
+        )
+
+        assert json.loads(raw)["metadata"]["success"] is False
+        assert "not a service setup" in json.loads(raw)["error"]
+
+
+class TestGetStructure:
+    """``get`` returns a small map, refuses a large one, and drops it on ``structure=false`` (DEV-949)."""
+
+    @staticmethod
+    async def _get(stored: dict[str, str] | None, **fields: Any) -> dict[str, Any]:
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"a": 1}, "structure": stored})
+        manager = ServicesManager(setup, registry)
+        return _env(await manager.services_manager(GetServiceAction(setup_id=created.id, **fields)))
+
+    @staticmethod
+    def _big_map() -> dict[str, str]:
+        return {f"items[{index}].name": "x" * 40 for index in range(100)}
+
+    async def test_a_small_map_is_returned_as_before(self) -> None:
+        version = (await self._get({"a": "what a is"}))["output"]["current_setup_version"]
+
+        assert version["structure"] == {"a": "what a is"}
+        assert "structure_entries" not in version
+
+    async def test_a_large_map_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        env = await self._get(self._big_map())
+
+        assert env["metadata"]["success"] is False
+        assert "100 entries" in env["error"]
+        assert "structure=false" in env["error"]
+
+    async def test_structure_false_drops_the_map_and_counts_it(self) -> None:
+        version = (await self._get({"a": "what a is"}, structure=False))["output"]["current_setup_version"]
+
+        assert "structure" not in version
+        assert "content" not in version
+        assert version["structure_entries"] == 1
+
+    async def test_structure_false_on_a_large_map_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        env = await self._get(self._big_map(), structure=False)
+
+        assert env["output"]["current_setup_version"]["structure_entries"] == 100
+        assert "x" * 40 not in json.dumps(env)
+
+    async def test_a_version_without_a_map_counts_zero(self) -> None:
+        version = (await self._get(None, structure=False))["output"]["current_setup_version"]
+
+        assert version["structure_entries"] == 0
+
+
+class TestSearchRowStructure:
+    """A ``search`` row shows a small map, and a text in place of a map too large to show (DEV-949)."""
+
+    @staticmethod
+    async def _rows(structure: dict[str, str]) -> list[dict[str, Any]]:
+        setup, registry = _stores()
+
+        class _WithMap(DefaultRegistry):
+            async def search_setups(self, *args: Any, **kwargs: Any) -> list[SetupSummary]:
+                return [
+                    SetupSummary(
+                        setup_id="setups:big",
+                        name="Big",
+                        module_type=RegistryModuleType.SERVICE,
+                        setup_version="1.0.0",
+                        structure=structure,
+                    )
+                ]
+
+        indexed = _WithMap("", "", "")
+        indexed._modules = registry._modules
+        env = _env(await ServicesManager(setup, indexed).services_manager(SearchAction(query="big")))
+        return env["output"]["setups"]
+
+    async def test_a_small_map_is_shown(self) -> None:
+        assert (await self._rows({"a": "what a is"}))[0]["structure"] == {"a": "what a is"}
+
+    async def test_a_large_map_is_replaced_by_a_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_STRUCTURE_MAX_CHARS", "1000")
+
+        row = (await self._rows({f"items[{index}].name": "x" * 40 for index in range(100)}))[0]
+
+        assert isinstance(row["structure"], str)
+        assert "100 entries" in row["structure"]
+        assert "structure action" in row["structure"]
+        assert "x" * 40 not in json.dumps(row)
 
 
 class TestSearchRowsCarryTheStructure:
@@ -1465,8 +1777,8 @@ class TestStructureFieldValidation:
         with pytest.raises(ValidationError):
             LoadServiceAction(setup_id="s", key=["llm.model"])  # type: ignore[arg-type]
 
-    def test_structure_action_takes_only_a_setup_id(self) -> None:
-        assert set(StructureServiceAction.model_fields) - {"action"} == {"setup_id"}
+    def test_structure_action_takes_a_setup_id_and_paging(self) -> None:
+        assert set(StructureServiceAction.model_fields) - {"action"} == {"setup_id", "prefix", "offset", "limit"}
 
     def test_structure_is_a_read_not_a_write(self) -> None:
         """``writes`` drives cache invalidation; a shape read must not trigger it."""
@@ -1517,7 +1829,7 @@ class TestScopedReadBoundaries:
         """A services manager over one setup with the given content and authored map."""
         svc = ServicesManager(*_stores())
         created = _env(await svc.services_manager(CreateServiceAction(name="N", content=content, structure=structure)))
-        return svc, created["output"]["id"]
+        return svc, created["output"]["setup_id"]
 
     async def test_a_key_naming_a_section_returns_the_whole_section(self) -> None:
         """Containers stay fetchable, so an author may scope at section level."""
@@ -1563,15 +1875,15 @@ class TestScopedReadBoundaries:
     async def test_an_empty_map_is_stored_as_empty(self) -> None:
         """Nothing is derived on the agent's behalf: an empty map stays empty.
 
-        Asserted on the create response, which carries the stored map. A later ``get``
-        cannot show it: GetSetupResponse has no structure field, and both strategies
-        mirror that — ``structure`` is the action for reading it back.
+        Asserted on the store: the create response is a receipt, and a later ``get`` cannot show
+        the map (GetSetupResponse has no structure field, and both strategies mirror that).
         """
-        svc = ServicesManager(*_stores())
+        setup, registry = _stores()
+        svc = ServicesManager(setup, registry)
 
         created = _env(await svc.services_manager(CreateServiceAction(name="N", content={"a": "one"}, structure={})))
 
-        assert created["output"]["current_setup_version"]["structure"] == {}
+        assert setup.setups[created["output"]["setup_id"]].current_setup_version.structure == {}
 
 
 class TestConfigurationIsNotRewritten:
@@ -1589,7 +1901,7 @@ class TestConfigurationIsNotRewritten:
         """A services manager over one setup carrying the given configuration."""
         svc = ServicesManager(*_stores())
         created = _env(await svc.services_manager(CreateServiceAction(name="N", content=content, structure=structure)))
-        return svc, created["output"]["id"]
+        return svc, created["output"]["setup_id"]
 
     async def test_load_returns_a_visibility_key_verbatim(self) -> None:
         content = {"visibility": "VISIBILITY_PRIVATE", "region": "eu"}
@@ -1612,9 +1924,2244 @@ class TestConfigurationIsNotRewritten:
         svc, setup_id = await self._service_with({"a": 1}, {"a": "knob"})
         await svc.services_manager(ChangeVisibilityAction(setup_id=setup_id, visibility="internal"))
 
-        env = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+        env = _env(await svc.services_manager(GetServiceAction(setup_id=setup_id)))
 
         assert env["output"]["visibility"] == "internal"
+
+
+class TestPatchAndAppend:
+    """``patch`` changes one existing element, ``append`` adds one; both cut a new version."""
+
+    _BASE_MAP: ClassVar[dict[str, str]] = {"llm.model": "which model answers", "tools": "what it may call"}
+
+    @classmethod
+    async def _service(cls) -> tuple[ServicesManager, str]:
+        """A services manager over one service with a key map and documentation."""
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(
+                    name="Brand",
+                    content={"llm": {"model": "small"}, "tools": ["search"]},
+                    documentation="the house voice",
+                    structure=cls._BASE_MAP,
+                )
+            )
+        )
+        return manager, created["output"]["setup_id"]
+
+    @staticmethod
+    async def _current(manager: ServicesManager, setup_id: str) -> dict[str, Any]:
+        version = _env(await manager.services_manager(GetServiceAction(setup_id=setup_id)))["output"]
+        version = version["current_setup_version"]
+        version["content"] = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id)))["output"]
+        return version
+
+    @staticmethod
+    async def _version_count(manager: ServicesManager, setup_id: str) -> int:
+        return _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"]
+
+    async def test_patch_changes_one_key_and_keeps_the_rest(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="llm.model", value="large", structure={"llm.model": "which model answers"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"] == {"llm": {"model": "large"}, "tools": ["search"]}
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_patch_refuses_an_absent_path_and_cuts_nothing(self) -> None:
+        """Patch never creates, so a mistyped key cannot slip a stray entry into the service."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(setup_id=setup_id, path="llm.modle", value="x", structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "append" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_append_adds_a_new_key_and_its_entry(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id, path="llm.temperature", value=0.2, structure={"llm.temperature": "how creative"}
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["llm"] == {"model": "small", "temperature": 0.2}
+        assert current["structure"] == {**self._BASE_MAP, "llm.temperature": "how creative"}
+
+    async def test_append_pushes_onto_a_list_and_describes_the_new_item(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id, path="tools", value="fetch", structure={"tools[1]": "the page fetcher"}
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["tools"] == ["search", "fetch"]
+        assert current["structure"] == {**self._BASE_MAP, "tools[1]": "the page fetcher"}
+
+    async def test_append_refuses_an_existing_value_and_cuts_nothing(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(AppendServiceAction(setup_id=setup_id, path="llm", value="x", structure={}))
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "patch" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_a_patched_section_is_described_again(self) -> None:
+        """Replacing a section removes its keys, so their entries go and the call's own come in."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(
+                setup_id=setup_id,
+                path="llm",
+                value={"name": "large", "temperature": 0.2},
+                structure={"llm.name": "which model answers", "llm.temperature": "how creative"},
+            )
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {
+            "tools": "what it may call",
+            "llm.name": "which model answers",
+            "llm.temperature": "how creative",
+        }
+
+    async def test_an_empty_map_leaves_the_edited_element_undescribed(self) -> None:
+        """The call describes what it writes, as on create: an empty map means no entry for it."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(setup_id=setup_id, path="llm.model", value="large", structure={})
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {"tools": "what it may call"}
+
+    async def test_entries_outside_the_edited_element_are_kept(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            AppendServiceAction(setup_id=setup_id, path="region", value="eu", structure={"region": "where it runs"})
+        )
+
+        assert (await self._current(manager, setup_id))["structure"] == {**self._BASE_MAP, "region": "where it runs"}
+
+    async def test_an_entry_guessing_the_wrong_list_index_is_refused_and_names_the_real_one(self) -> None:
+        """A push lands at the end; an entry keyed elsewhere would describe another item."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(
+                    setup_id=setup_id, path="tools", value="fetch", structure={"tools[0]": "the page fetcher"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "tools[1]" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_entry_naming_a_missing_key_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="llm", value={"name": "large"}, structure={"llm.model": "stale"}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "llm.model" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    @pytest.mark.parametrize("action_class", [PatchServiceAction, AppendServiceAction])
+    def test_a_structure_is_required(self, action_class: type[PatchServiceAction]) -> None:
+        """Like create: an action that can add or remove keys must say what it writes."""
+        with pytest.raises(ValidationError, match="structure"):
+            action_class(setup_id="setups:x", path="a", value=1)  # type: ignore[call-arg]
+
+    @pytest.mark.parametrize("action", ["patch", "append"])
+    async def test_a_raw_call_without_a_structure_fails_cleanly(self, action: str) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager({"action": action, "setup_id": setup_id, "path": "region", "value": "eu"})
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "structure" in env["error"]
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            PatchServiceAction(setup_id="", path="llm.model", value="large", structure={}),
+            AppendServiceAction(setup_id="", path="region", value="eu", structure={}),
+        ],
+    )
+    async def test_the_name_and_documentation_carry_over(self, action: PatchServiceAction) -> None:
+        """Unlike update, the configuration and its documentation never have to be resent."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(action.model_copy(update={"setup_id": setup_id}))
+
+        env = _env(await manager.services_manager(GetServiceAction(setup_id=setup_id)))
+        assert env["output"]["name"] == "Brand"
+        assert env["output"]["current_setup_version"]["documentation"] == "the house voice"
+
+    async def test_an_edit_can_start_from_an_older_version(self) -> None:
+        manager, setup_id = await self._service()
+        first = (await self._current(manager, setup_id))["id"]
+        await manager.services_manager(
+            UpdateServiceAction(
+                setup_id=setup_id, name="Brand", content={"llm": {"model": "BROKEN"}}, structure={"llm": "broken"}
+            )
+        )
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id,
+                setup_version_id=first,
+                path="region",
+                value="eu",
+                structure={"region": "where it runs"},
+            )
+        )
+
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {"model": "small"}, "tools": ["search"], "region": "eu"}
+        assert current["structure"] == {**self._BASE_MAP, "region": "where it runs"}
+        assert await self._version_count(manager, setup_id) == 3
+
+    async def test_a_version_of_another_setup_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+        other = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="Other", content={"llm": {"model": "x"}}, structure={})
+            )
+        )
+        foreign = other["output"]["setup_version_id"]
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, setup_version_id=foreign, path="llm.model", value="x", structure={}
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "is not a version of" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_edit_can_be_staged_without_activating(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(
+            PatchServiceAction(setup_id=setup_id, path="llm.model", value="large", structure={}, set_as_current=False)
+        )
+
+        assert (await self._current(manager, setup_id))["content"]["llm"]["model"] == "small"
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager(
+                PatchServiceAction(setup_id="setups:duda", path="secret", value="x", structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in env["error"]
+
+    async def test_a_key_persistence_would_mangle_is_refused(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="mood\U0001f525", value=1, structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_a_raw_flattened_call_dispatches(self) -> None:
+        """Exactly what the model sends: the action's fields as siblings of the discriminator."""
+        manager, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                "patch", setup_id=setup_id, path="llm.model", value="large", structure={"llm.model": "the model"}
+            )
+        )
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"]["llm"]["model"] == "large"
+
+    async def test_a_null_value_is_written_not_dropped(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager({
+            "action": "patch",
+            "setup_id": setup_id,
+            "path": "llm.model",
+            "value": None,
+            "structure": {},
+        })
+
+        assert (await self._current(manager, setup_id))["content"]["llm"] == {"model": None}
+
+
+class TestPatchAndAppendSurface:
+    """``patch`` and ``append`` are cache-invalidating writes, and exist on services only."""
+
+    def test_both_actions_are_writes(self) -> None:
+        """``writes`` drives the setup-cache invalidation; without it running jobs keep the old config."""
+        assert PatchServiceAction.writes is True
+        assert AppendServiceAction.writes is True
+
+    async def test_both_actions_are_services_only(self) -> None:
+        setup, registry = _stores()
+        for action in ("patch", "append"):
+            env = _env(
+                await KinsManager(setup, registry).kins_manager({
+                    "action": action,
+                    "setup_id": "setups:isaac",
+                    "path": "agent",
+                    "value": "y",
+                    "structure": {},
+                })
+            )
+            assert env["metadata"]["success"] is False
+
+
+class TestRemoveAction:
+    """``remove`` deletes one element and keeps the map describing what is left."""
+
+    _BASE_MAP: ClassVar[dict[str, str]] = {
+        "llm.model": "which model answers",
+        "tools[1]": "the fetcher",
+        "tools[2]": "the browser",
+    }
+
+    @classmethod
+    async def _service(cls) -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(
+                    name="Brand",
+                    content={"llm": {"model": "small"}, "tools": ["search", "fetch", "browse"]},
+                    documentation="the house voice",
+                    structure=cls._BASE_MAP,
+                )
+            )
+        )
+        return manager, created["output"]["setup_id"]
+
+    @staticmethod
+    async def _current(manager: ServicesManager, setup_id: str) -> dict[str, Any]:
+        version = _env(await manager.services_manager(GetServiceAction(setup_id=setup_id)))["output"]
+        version = version["current_setup_version"]
+        version["content"] = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id)))["output"]
+        return version
+
+    @staticmethod
+    async def _version_count(manager: ServicesManager, setup_id: str) -> int:
+        return _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"]
+
+    async def test_removes_a_key_and_its_entry(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm.model")))
+
+        assert env["metadata"]["success"] is True
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {}, "tools": ["search", "fetch", "browse"]}
+        assert current["structure"] == {"tools[1]": "the fetcher", "tools[2]": "the browser"}
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_removing_a_list_item_renumbers_the_later_entries(self) -> None:
+        """The browser moved from tools[2] to tools[1]; its entry must follow it, not vanish or lie."""
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="tools[1]"))
+
+        current = await self._current(manager, setup_id)
+        assert current["content"]["tools"] == ["search", "browse"]
+        assert current["structure"] == {"llm.model": "which model answers", "tools[1]": "the browser"}
+
+    async def test_an_absent_path_is_refused_and_cuts_nothing(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm.modle")))
+
+        assert env["metadata"]["success"] is False
+        assert "not found" in env["error"]
+        assert await self._version_count(manager, setup_id) == 1
+
+    async def test_an_empty_path_fails_cleanly(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager({"action": "remove", "setup_id": setup_id, "path": ""}))
+
+        assert env["metadata"]["success"] is False
+        assert "path" in env["error"]
+
+    async def test_the_name_and_documentation_carry_over(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="tools[0]"))
+
+        env = _env(await manager.services_manager(GetServiceAction(setup_id=setup_id)))
+        assert env["output"]["name"] == "Brand"
+        assert env["output"]["current_setup_version"]["documentation"] == "the house voice"
+
+    async def test_a_removal_can_start_from_an_older_version(self) -> None:
+        manager, setup_id = await self._service()
+        first = (await self._current(manager, setup_id))["id"]
+        await manager.services_manager(
+            UpdateServiceAction(setup_id=setup_id, name="Brand", content={"llm": {"model": "BROKEN"}}, structure={})
+        )
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, setup_version_id=first, path="tools[0]"))
+
+        current = await self._current(manager, setup_id)
+        assert current["content"] == {"llm": {"model": "small"}, "tools": ["fetch", "browse"]}
+        assert current["structure"] == {
+            "llm.model": "which model answers",
+            "tools[0]": "the fetcher",
+            "tools[1]": "the browser",
+        }
+
+    async def test_a_removal_can_be_staged_without_activating(self) -> None:
+        manager, setup_id = await self._service()
+
+        await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="llm", set_as_current=False))
+
+        assert "llm" in (await self._current(manager, setup_id))["content"]
+        assert await self._version_count(manager, setup_id) == 2
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = _env(
+            await ServicesManager(*_stores()).services_manager(
+                RemoveServiceAction(setup_id="setups:duda", path="secret")
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in env["error"]
+
+    async def test_a_raw_flattened_call_dispatches(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = _env(await manager.services_manager("remove", setup_id=setup_id, path="llm.model"))
+
+        assert env["metadata"]["success"] is True
+        assert (await self._current(manager, setup_id))["content"]["llm"] == {}
+
+    def test_it_takes_no_value_and_no_map(self) -> None:
+        """Nothing is written, so there is nothing to describe: the map is updated from the removal."""
+        assert "value" not in RemoveServiceAction.model_fields
+        assert "structure" not in RemoveServiceAction.model_fields
+
+    def test_it_is_a_write(self) -> None:
+        assert RemoveServiceAction.writes is True
+
+    async def test_it_is_services_only(self) -> None:
+        env = _env(
+            await KinsManager(*_stores()).kins_manager({
+                "action": "remove",
+                "setup_id": "setups:isaac",
+                "path": "agent",
+            })
+        )
+
+        assert env["metadata"]["success"] is False
+
+
+class TestDottedListIndex:
+    """A list index joined with "." (``items.0.title``, as Gemini writes it) is used as ``items[0].title``.
+
+    The backend resolves only the bracket form: a dotted entry stored by create named nothing, and patch,
+    append and remove refused the dotted path as not found (campaign r1, D-DOTIDX).
+    """
+
+    _CONTENT: ClassVar[dict[str, Any]] = {"items": [{"title": "a"}, {"title": "b"}]}
+
+    @classmethod
+    async def _service(cls, structure: dict[str, str]) -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = await manager.services_manager(
+            CreateServiceAction(name="Catalog", content=cls._CONTENT, structure=structure)
+        )
+        return manager, _env(created)["output"]["setup_id"]
+
+    @staticmethod
+    async def _read(manager: ServicesManager, setup_id: str) -> tuple[dict[str, Any], dict[str, str]]:
+        content = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id)))["output"]
+        structure = _env(await manager.services_manager(StructureServiceAction(setup_id=setup_id)))["output"]
+        return content, structure
+
+    @pytest.mark.regression
+    async def test_create_stores_the_bracket_form(self) -> None:
+        manager, setup_id = await self._service({"items": "the items", "items.0.title": "first title"})
+
+        assert (await self._read(manager, setup_id))[1] == {"items": "the items", "items[0].title": "first title"}
+
+    @pytest.mark.regression
+    async def test_update_stores_the_bracket_form(self) -> None:
+        manager, setup_id = await self._service({})
+
+        await manager.services_manager(
+            UpdateServiceAction(
+                setup_id=setup_id, name="Catalog", content=self._CONTENT, structure={"items.1.title": "second"}
+            )
+        )
+
+        assert (await self._read(manager, setup_id))[1] == {"items[1].title": "second"}
+
+    @pytest.mark.regression
+    async def test_patch_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(
+            await manager.services_manager(
+                PatchServiceAction(
+                    setup_id=setup_id, path="items.1.title", value="B", structure={"items.1.title": "second title"}
+                )
+            )
+        )
+
+        content, structure = await self._read(manager, setup_id)
+        assert env["output"]["path"] == "items[1].title"
+        assert content["items"][1] == {"title": "B"}
+        assert structure == {"items[1].title": "second title"}
+
+    async def test_append_takes_a_dotted_index_in_its_structure(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(
+                    setup_id=setup_id, path="items", value={"title": "c"}, structure={"items.2": "third item"}
+                )
+            )
+        )
+
+        assert env["output"]["path"] == "items[2]"
+        assert (await self._read(manager, setup_id))[1] == {"items[2]": "third item"}
+
+    @pytest.mark.regression
+    async def test_remove_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        env = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="items.0")))
+
+        assert env["output"]["path"] == "items[0]"
+        assert (await self._read(manager, setup_id))[0]["items"] == [{"title": "b"}]
+
+    async def test_update_structure_takes_a_dotted_index(self) -> None:
+        manager, setup_id = await self._service({})
+
+        await manager.services_manager(
+            UpdateStructureServiceAction(setup_id=setup_id, entries={"items.0.title": "first title"})
+        )
+
+        assert (await self._read(manager, setup_id))[1] == {"items[0].title": "first title"}
+
+
+class TestWriteReceipts:
+    """A service write answers a short receipt, never the configuration (DEV-937).
+
+    Echoing the whole service after every write made a long edit loop fill the model's context.
+    """
+
+    _BIG = "x" * 5000
+
+    @staticmethod
+    async def _service() -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="Catalog", content={"products": ["first"]}, structure={})
+            )
+        )
+        return manager, created["output"]["setup_id"]
+
+    @staticmethod
+    async def _current(manager: ServicesManager, setup_id: str) -> dict[str, Any]:
+        version = _env(await manager.services_manager(GetServiceAction(setup_id=setup_id)))["output"]
+        version = version["current_setup_version"]
+        version["content"] = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id)))["output"]
+        return version
+
+    async def test_create_answers_a_receipt(self) -> None:
+        manager = ServicesManager(*_stores())
+        content = {"products": [self._BIG]}
+
+        raw = await manager.services_manager(CreateServiceAction(name="Catalog", content=content, structure={}))
+
+        output = _env(raw)["output"]
+        current = await self._current(manager, output["setup_id"])
+        assert output == {
+            "setup_id": output["setup_id"],
+            "setup_version_id": current["id"],
+            "version": current["version"],
+            "path": "",
+            "content_chars": len(json.dumps(content, ensure_ascii=False)),
+        }
+        assert self._BIG not in raw
+
+    @pytest.mark.parametrize(
+        ("action", "path"),
+        [
+            (PatchServiceAction(setup_id="", path="products[0]", value=_BIG, structure={}), "products[0]"),
+            (AppendServiceAction(setup_id="", path="products", value=_BIG, structure={}), "products[1]"),
+            (AppendServiceAction(setup_id="", path="notes", value=_BIG, structure={}), "notes"),
+        ],
+    )
+    async def test_an_edit_answers_the_path_it_wrote(self, action: PatchServiceAction, path: str) -> None:
+        """An item pushed onto a list is named by the index it landed at, for the next edit to use."""
+        manager, setup_id = await self._service()
+
+        raw = await manager.services_manager(action.model_copy(update={"setup_id": setup_id}))
+
+        output = _env(raw)["output"]
+        current = await self._current(manager, setup_id)
+        assert output == {
+            "setup_id": setup_id,
+            "setup_version_id": current["id"],
+            "version": current["version"],
+            "path": path,
+            "content_chars": len(json.dumps(current["content"], ensure_ascii=False)),
+        }
+        assert self._BIG not in raw
+
+    async def test_remove_answers_a_receipt(self) -> None:
+        manager, setup_id = await self._service()
+
+        output = _env(await manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="products[0]")))[
+            "output"
+        ]
+
+        assert output["path"] == "products[0]"
+        assert output["content_chars"] == len(json.dumps({"products": []}))
+
+    async def test_update_answers_a_receipt(self) -> None:
+        manager, setup_id = await self._service()
+        content = {"products": [self._BIG, self._BIG]}
+
+        raw = await manager.services_manager(
+            UpdateServiceAction(setup_id=setup_id, name="Catalog", content=content, structure={})
+        )
+
+        output = _env(raw)["output"]
+        assert output["setup_version_id"] == (await self._current(manager, setup_id))["id"]
+        assert output["content_chars"] == len(json.dumps(content, ensure_ascii=False))
+        assert self._BIG not in raw
+
+    @pytest.mark.regression
+    async def test_set_version_answers_a_receipt(self) -> None:
+        """set_version echoed the whole configuration of the version it activated (campaign r1, D-SETVERSION-FULL)."""
+        manager, setup_id = await self._service()
+        first = await self._current(manager, setup_id)
+        await manager.services_manager(
+            UpdateServiceAction(setup_id=setup_id, name="Catalog", content={"products": [self._BIG]}, structure={})
+        )
+
+        raw = await manager.services_manager({
+            "action": "set_version",
+            "setup_id": setup_id,
+            "setup_version_id": first["id"],
+        })
+
+        assert _env(raw)["output"] == {
+            "setup_id": setup_id,
+            "setup_version_id": first["id"],
+            "version": first["version"],
+            "path": "",
+            "content_chars": len(json.dumps(first["content"], ensure_ascii=False)),
+        }
+        assert (await self._current(manager, setup_id))["id"] == first["id"]
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "action",
+        [
+            PatchServiceAction(setup_id="", path="products[0]", value="staged", structure={}, set_as_current=False),
+            AppendServiceAction(setup_id="", path="products", value="staged", structure={}, set_as_current=False),
+            RemoveServiceAction(setup_id="", path="products[0]", set_as_current=False),
+            UpdateServiceAction(
+                setup_id="", name="Catalog", content={"products": ["staged"]}, structure={}, set_as_current=False
+            ),
+        ],
+    )
+    async def test_a_staged_write_answers_the_version_it_cut(self, action: UpdateAction) -> None:
+        """A staged write answered the still-active version, so set_version on its id activated nothing."""
+        manager, setup_id = await self._service()
+        live = await self._current(manager, setup_id)
+
+        output = _env(await manager.services_manager(action.model_copy(update={"setup_id": setup_id})))["output"]
+
+        assert output["setup_version_id"] != live["id"]
+        assert (await self._current(manager, setup_id))["id"] == live["id"]
+        await manager.services_manager({
+            "action": "set_version",
+            "setup_id": setup_id,
+            "setup_version_id": output["setup_version_id"],
+        })
+        staged = await self._current(manager, setup_id)
+        assert (staged["id"], staged["version"]) == (output["setup_version_id"], output["version"])
+        assert output["content_chars"] == len(json.dumps(staged["content"], ensure_ascii=False))
+
+    async def test_a_kin_set_version_still_answers_the_setup(self) -> None:
+        """Only service writes answer receipts; the kins and tools managers keep their answers (DEV-937)."""
+        manager = KinsManager(*_stores())
+
+        env = _env(
+            await manager.kins_manager(SetVersionAction(setup_id="setups:isaac", setup_version_id="setups:isaac:v"))
+        )
+
+        assert env["output"]["current_setup_version"]["content"] == {"agent": "x"}
+
+    async def test_a_tool_update_still_answers_the_setup(self) -> None:
+        """Receipts are a services change: tools and kins keep their full answer."""
+        output = _env(
+            await KinsManager(*_stores()).kins_manager(
+                UpdateAction(setup_id="setups:isaac", name="Isaac", content={"agent": "y"})
+            )
+        )["output"]
+
+        assert output["current_setup_version"]["content"] == {"agent": "y"}
+
+
+class TestServiceWriteLock:
+    """Parallel writes on one service run one after the other, each from the other's result (DEV-938).
+
+    The store yields between the read and the write, as the gRPC setup service does, so without the lock
+    every parallel edit starts from the same base and only the last one survives.
+    """
+
+    @staticmethod
+    async def _yielding_service(content: dict[str, Any]) -> tuple[ServicesManager, DefaultSetup, str]:
+        setup, registry = _stores()
+        manager = ServicesManager(setup, registry)
+        created = _env(
+            await manager.services_manager(CreateServiceAction(name="Catalog", content=content, structure={}))
+        )
+        write = setup.update_setup
+
+        async def slow_write(data: dict[str, Any]) -> SetupData:
+            await asyncio.sleep(0)
+            return await write(data)
+
+        setup.update_setup = slow_write  # type: ignore[method-assign]
+        return manager, setup, created["output"]["setup_id"]
+
+    async def test_parallel_appends_on_one_service_all_land(self) -> None:
+        manager, setup, setup_id = await self._yielding_service({"products": []})
+
+        envelopes = await asyncio.gather(
+            *(
+                manager.services_manager(
+                    AppendServiceAction(setup_id=setup_id, path="products", value={"id": index}, structure={})
+                )
+                for index in range(5)
+            )
+        )
+
+        assert all(_env(raw)["output"]["path"].startswith("products[") for raw in envelopes)
+        products = setup.setups[setup_id].current_setup_version.content["products"]
+        assert sorted(item["id"] for item in products) == [0, 1, 2, 3, 4]
+
+    async def test_parallel_patch_and_remove_keep_both(self) -> None:
+        manager, setup, setup_id = await self._yielding_service({"a": 1, "b": 2})
+
+        await asyncio.gather(
+            manager.services_manager(PatchServiceAction(setup_id=setup_id, path="a", value=10, structure={})),
+            manager.services_manager(RemoveServiceAction(setup_id=setup_id, path="b")),
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content == {"a": 10}
+
+    async def test_a_waiting_write_logs_the_validate_marker(self, caplog: pytest.LogCaptureFixture) -> None:
+        manager, _, setup_id = await self._yielding_service({"products": []})
+
+        with caplog.at_level("INFO"):
+            await asyncio.gather(
+                *(
+                    manager.services_manager(
+                        AppendServiceAction(setup_id=setup_id, path="products", value=index, structure={})
+                    )
+                    for index in range(2)
+                )
+            )
+
+        assert "[VALIDATE SERVICE-WRITE-LOCK]" in caplog.text
+
+
+class TestBatchAndTextAppend:
+    """``append`` pushes several list items in one call, and adds text at the end of a text (DEV-938)."""
+
+    @staticmethod
+    async def _service(content: dict[str, Any], structure: dict[str, str]) -> tuple[ServicesManager, DefaultSetup, str]:
+        setup, registry = _stores()
+        manager = ServicesManager(setup, registry)
+        created = _env(
+            await manager.services_manager(CreateServiceAction(name="Catalog", content=content, structure=structure))
+        )
+        return manager, setup, created["output"]["setup_id"]
+
+    async def test_items_push_every_item(self) -> None:
+        manager, setup, setup_id = await self._service({"products": [0, 1, 2]}, {})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="products", items=list(range(3, 23)), structure={})
+            )
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content["products"] == list(range(23))
+        assert env["output"]["path"] == "products[22]"
+
+    async def test_items_create_a_missing_list(self) -> None:
+        manager, setup, setup_id = await self._service({"title": "x"}, {})
+
+        await manager.services_manager(
+            AppendServiceAction(setup_id=setup_id, path="catalog.products", items=[{"id": 1}, {"id": 2}], structure={})
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content["catalog"] == {"products": [{"id": 1}, {"id": 2}]}
+
+    async def test_items_map_entry_names_the_list_and_keeps_the_others(self) -> None:
+        manager, setup, setup_id = await self._service({"products": [{"id": 0}]}, {"products[0]": "the first one"})
+
+        await manager.services_manager(
+            AppendServiceAction(
+                setup_id=setup_id,
+                path="products",
+                items=[{"id": 1}],
+                structure={"products": "catalog, each product {id}", "products[1].id": "its id"},
+            )
+        )
+
+        assert setup.setups[setup_id].current_setup_version.structure == {
+            "products[0]": "the first one",
+            "products": "catalog, each product {id}",
+            "products[1].id": "its id",
+        }
+
+    async def test_items_structure_outside_the_list_is_refused(self) -> None:
+        manager, setup, setup_id = await self._service({"products": [], "other": 1}, {})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="products", items=[1], structure={"other": "elsewhere"})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert setup.setups[setup_id].current_setup_version.content["products"] == []
+
+    async def test_items_on_a_non_list_is_refused(self) -> None:
+        manager, _, setup_id = await self._service({"title": "x"}, {})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="title", items=[1], structure={})
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "patch" in env["error"]
+
+    @pytest.mark.parametrize(
+        "fields",
+        [{"value": 1, "items": [1]}, {}, {"items": []}],
+        ids=["both", "neither", "no items"],
+    )
+    async def test_value_xor_items(self, fields: dict[str, Any]) -> None:
+        manager, setup, setup_id = await self._service({"products": []}, {})
+
+        env = _env(
+            await manager.services_manager({
+                "action": "append",
+                "setup_id": setup_id,
+                "path": "products",
+                "structure": {},
+                **fields,
+            })
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "items" in env["error"]
+        assert setup.setups[setup_id].current_setup_version.content == {"products": []}
+
+    async def test_a_null_value_is_still_one_value(self) -> None:
+        manager, setup, setup_id = await self._service({"products": []}, {})
+
+        await manager.services_manager({
+            "action": "append",
+            "setup_id": setup_id,
+            "path": "products",
+            "value": None,
+            "structure": {},
+        })
+
+        assert setup.setups[setup_id].current_setup_version.content == {"products": [None]}
+
+    async def test_text_value_on_a_text_is_concatenated(self) -> None:
+        manager, setup, setup_id = await self._service({"notes": "abc"}, {"notes": "free notes"})
+
+        env = _env(
+            await manager.services_manager(
+                AppendServiceAction(setup_id=setup_id, path="notes", value="def", structure={})
+            )
+        )
+
+        version = setup.setups[setup_id].current_setup_version
+        assert version.content == {"notes": "abcdef"}
+        assert version.structure == {"notes": "free notes"}
+        assert env["output"]["path"] == "notes"
+
+    async def test_non_text_value_on_a_text_is_refused(self) -> None:
+        manager, _, setup_id = await self._service({"notes": "abc"}, {})
+
+        env = _env(
+            await manager.services_manager(AppendServiceAction(setup_id=setup_id, path="notes", value=1, structure={}))
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "patch" in env["error"]
+
+
+class TestPagedLoad:
+    """``load`` reads a large list, text or object page by page, and refuses a huge part unpaged (DEV-938, DEV-949)."""
+
+    @staticmethod
+    async def _service(content: dict[str, Any]) -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(await manager.services_manager(CreateServiceAction(name="Big", content=content, structure={})))
+        return manager, created["output"]["setup_id"]
+
+    @staticmethod
+    async def _load(manager: ServicesManager, setup_id: str, **fields: Any) -> dict[str, Any]:
+        return _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id, **fields)))
+
+    async def test_a_list_page(self) -> None:
+        manager, setup_id = await self._service({"products": list(range(50))})
+
+        env = await self._load(manager, setup_id, key="products", offset=10, limit=5)
+
+        assert env["output"] == {"page": [10, 11, 12, 13, 14], "offset": 10, "total": 50, "next_offset": 15}
+
+    async def test_the_last_page_has_no_next(self) -> None:
+        manager, setup_id = await self._service({"products": list(range(50))})
+
+        env = await self._load(manager, setup_id, key="products", offset=48, limit=5)
+
+        assert env["output"] == {"page": [48, 49], "offset": 48, "total": 50, "next_offset": None}
+
+    async def test_an_offset_past_the_end_is_an_empty_page(self) -> None:
+        manager, setup_id = await self._service({"products": list(range(3))})
+
+        env = await self._load(manager, setup_id, key="products", offset=10, limit=5)
+
+        assert env["output"] == {"page": [], "offset": 10, "total": 3, "next_offset": None}
+
+    async def test_a_text_page(self) -> None:
+        text = "".join(str(index % 10) for index in range(100))
+        manager, setup_id = await self._service({"notes": text})
+
+        output = (await self._load(manager, setup_id, key="notes", offset=90, limit=20))["output"]
+
+        # The page opens on the last characters before the offset asked (a fifth of this tiny page).
+        assert (output["page"], output["offset"], output["total"], output["next_offset"]) == (text[85:], 85, 100, None)
+        assert output["part"].startswith("characters 85-100 of 100; its first 5 characters repeat")
+
+    async def test_a_scalar_cannot_be_paged(self) -> None:
+        manager, setup_id = await self._service({"title": 3})
+
+        env = await self._load(manager, setup_id, key="title", offset=0, limit=5)
+
+        assert env["metadata"]["success"] is False
+        assert "a list, a text or an object" in env["error"]
+
+    async def test_an_object_pages_by_its_keys(self) -> None:
+        manager, setup_id = await self._service({"catalog": {"b": 1, "a": 2, "c": 3}})
+
+        env = await self._load(manager, setup_id, key="catalog", offset=1, limit=1)
+
+        assert env["output"] == {"page": {"b": 1}, "offset": 1, "total": 3, "next_offset": 2}
+
+    async def test_the_whole_configuration_pages_by_its_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({f"sku{index:04d}": "w" * 50 for index in range(200)})
+
+        output = (await self._load(manager, setup_id, offset=0))["output"]
+
+        assert 0 < len(output["page"]) < 200
+        assert len(json.dumps(output["page"])) <= 1000
+        assert next(iter(output["page"])) == "sku0000"
+        assert output["total"] == 200
+        assert output["next_offset"] == len(output["page"])
+
+    async def test_a_large_list_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": ["x" * 98] * 30})
+
+        env = await self._load(manager, setup_id, key="products")
+
+        assert env["metadata"]["success"] is False
+        assert "products is a list of 30 items" in env["error"]
+        assert "offset and limit" in env["error"]
+        assert "x" * 98 not in json.dumps(env)
+
+    async def test_a_large_text_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"notes": "y" * 5000})
+
+        env = await self._load(manager, setup_id, key="notes")
+
+        assert env["metadata"]["success"] is False
+        assert "notes is a text of 5000 characters" in env["error"]
+
+    async def test_a_large_configuration_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": ["z" * 100] * 20, "title": "Shop", "meta": {"a": 1}})
+
+        env = await self._load(manager, setup_id)
+
+        assert env["metadata"]["success"] is False
+        assert "The configuration is an object of 3 keys" in env["error"]
+        assert "narrower key" in env["error"]
+
+    async def test_a_large_nested_object_without_paging_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"shop": {"products": ["z" * 100] * 20, "title": "Shop"}})
+
+        env = await self._load(manager, setup_id, key="shop")
+
+        assert env["metadata"]["success"] is False
+        assert "shop is an object of 2 keys" in env["error"]
+
+    async def test_a_page_of_one_oversized_value_names_its_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Paging an object never hands back one value larger than a page: it names the key to load (review #1)."""
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"catalog": {"products": ["x" * 98] * 30}, "meta": 1})
+
+        env = await self._load(manager, setup_id, offset=0)
+
+        assert env["metadata"]["success"] is False
+        assert "load key catalog" in env["error"]
+        assert "offset 1" in env["error"]
+        assert "x" * 98 not in json.dumps(env)
+
+    async def test_a_page_of_one_oversized_item_names_its_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": [{"a": "x" * 2000}, 1]})
+
+        env = await self._load(manager, setup_id, key="products", offset=0)
+
+        assert env["metadata"]["success"] is False
+        assert "load key products[0]" in env["error"]
+
+    async def test_a_nested_list_is_paged(self) -> None:
+        """The setup service answers a keyed read as ``{key: part}``, whatever the key's depth."""
+        manager, setup_id = await self._service({"catalog": {"products": list(range(50))}})
+
+        env = await self._load(manager, setup_id, key="catalog.products", offset=10, limit=5)
+
+        assert env["output"] == {"page": [10, 11, 12, 13, 14], "offset": 10, "total": 50, "next_offset": 15}
+
+    async def test_a_bracket_quoted_text_is_paged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_TEXT_OVERLAP_CHARS", "0")
+        manager, setup_id = await self._service({"limits": {"max.tokens": "abcdef"}})
+
+        output = (await self._load(manager, setup_id, key='limits["max.tokens"]', offset=2))["output"]
+
+        assert (output["page"], output["offset"], output["total"], output["next_offset"]) == ("cdef", 2, 6, None)
+
+    async def test_a_limit_never_exceeds_one_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        manager, setup_id = await self._service({"products": ["x" * 98] * 30, "notes": "y" * 5000})
+
+        listed = (await self._load(manager, setup_id, key="products", offset=0, limit=30))["output"]
+        text = (await self._load(manager, setup_id, key="notes", offset=0, limit=5000))["output"]
+
+        assert len(json.dumps(listed["page"])) <= 1000
+        assert listed["next_offset"] == len(listed["page"])
+        assert 0 < len(json.dumps(text["page"])) <= 1000
+
+    async def test_a_small_load_is_unchanged(self) -> None:
+        manager, setup_id = await self._service({"products": [1, 2], "title": "Shop"})
+
+        assert (await self._load(manager, setup_id))["output"] == {"products": [1, 2], "title": "Shop"}
+        assert (await self._load(manager, setup_id, key="products"))["output"] == {"products": [1, 2]}
+
+    async def test_service_get_has_no_content(self) -> None:
+        manager, setup_id = await self._service({"products": ["secret-item"] * 3})
+
+        raw = await manager.services_manager(GetServiceAction(setup_id=setup_id))
+
+        version = _env(raw)["output"]["current_setup_version"]
+        assert "content" not in version
+        assert version["content_chars"] == len(json.dumps({"products": ["secret-item"] * 3}))
+        assert "secret-item" not in raw
+
+    async def test_tool_and_kin_get_keep_the_content(self) -> None:
+        setup, registry = _stores()
+
+        tool = _env(await ToolsManager(setup, registry).tools_manager(GetAction(setup_id="setups:duda")))
+        kin = _env(await KinsManager(setup, registry).kins_manager(GetAction(setup_id="setups:isaac")))
+
+        assert tool["output"]["current_setup_version"]["content"] == {"secret": "MUST-NOT-LEAK"}
+        assert kin["output"]["current_setup_version"]["content"] == {"agent": "x"}
+
+
+class TestTextPages:
+    """A long text is paged at natural boundaries; each page opens on the end of the previous one (DEV-949)."""
+
+    _TEXT: ClassVar[str] = "".join(f"Sentence number {index} talks about the catalog. " for index in range(400))
+
+    @staticmethod
+    async def _read(monkeypatch: pytest.MonkeyPatch, text: str, offset: int, overlap: str = "100") -> dict[str, Any]:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "1000")
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_TEXT_OVERLAP_CHARS", overlap)
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"notes": text}, "structure": {}})
+        manager = ServicesManager(setup, registry)
+        env = await manager.services_manager(LoadServiceAction(setup_id=created.id, key="notes", offset=offset))
+        return _env(env)["output"]
+
+    async def _page(self, monkeypatch: pytest.MonkeyPatch, offset: int, overlap: str = "100") -> dict[str, Any]:
+        return await self._read(monkeypatch, self._TEXT, offset, overlap)
+
+    async def test_a_page_ends_on_a_sentence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        page = (await self._page(monkeypatch, 0))["page"]
+
+        assert page.rstrip().endswith("catalog.")
+        assert len(json.dumps(page)) <= 1000
+
+    async def test_the_next_page_opens_on_the_end_of_this_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0)
+        second = await self._page(monkeypatch, first["next_offset"])
+        repeated = first["next_offset"] - second["offset"]
+
+        assert first["next_offset"] == len(first["page"])
+        assert 0 < repeated <= 100
+        assert first["page"].endswith(second["page"][:repeated])
+        assert f"its first {repeated} characters repeat the end of the previous page" in second["part"]
+        assert len(json.dumps(second["page"])) <= 1000
+
+    async def test_part_says_which_characters_and_what_follows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = await self._page(monkeypatch, 0)
+
+        assert output["part"].startswith(f"characters 0-{len(output['page'])} of {len(self._TEXT)}")
+        assert f"next page starts at {output['next_offset']}" in output["part"]
+
+    async def test_following_next_offset_reads_the_whole_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        read, offset = "", 0
+        while offset is not None:
+            output = await self._page(monkeypatch, offset)
+            read = read[: output["offset"]] + output["page"]
+            offset = output["next_offset"]
+
+        assert read == self._TEXT
+        assert "last page" in output["part"]
+
+    async def test_without_overlap_a_page_starts_where_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0, overlap="0")
+        second = await self._page(monkeypatch, first["next_offset"], overlap="0")
+
+        assert second["offset"] == first["next_offset"]
+
+    async def test_an_offset_past_the_end_is_an_empty_last_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = await self._page(monkeypatch, len(self._TEXT) + 5)
+
+        assert (output["page"], output["next_offset"]) == ("", None)
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "".join(f"Phrase {index} : le câblage du boîtier est vérifié. " for index in range(300)),
+            "".join(f"第{index}章。机器人检查了电缆。🙂👨‍👩‍👧 " for index in range(300)),
+            '"' * 3000,
+            "\x01" * 3000,
+            "x" * 5000,
+            "\\n" * 2000,
+            "\n\n".join(['Line with "quotes" and \\backslashes\\ in it.'] * 200),
+        ],
+        ids=["accents", "cjk-emoji", "quotes", "control", "no-boundary", "backslash-n", "mixed"],
+    )
+    @pytest.mark.parametrize(
+        ("page_chars", "limit", "overlap"), [(1000, None, "100"), (1000, 100, "500"), (300, 40, "0")]
+    )
+    async def test_every_page_fits_and_the_text_rebuilds(
+        self, monkeypatch: pytest.MonkeyPatch, text: str, page_chars: int, limit: int | None, overlap: str
+    ) -> None:
+        """A page reached 95 012 JSON characters for a 20 000 budget, and an escaped overlap moved backward (B5, B6)."""
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", str(page_chars))
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_TEXT_OVERLAP_CHARS", overlap)
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"notes": text}, "structure": {}})
+        manager = ServicesManager(setup, registry)
+        capacity = min(page_chars, (limit or page_chars) + 2)
+        read, offset, previous_start, pages = "", 0, -1, 0
+        while offset is not None:
+            output = _env(
+                await manager.services_manager(
+                    LoadServiceAction(setup_id=created.id, key="notes", offset=offset, limit=limit or 1_000_000)
+                )
+            )["output"]
+            page = output["page"]
+            assert len(page) == 1 or len(json.dumps(page, ensure_ascii=False)) <= capacity
+            assert output["offset"] > previous_start
+            assert output["offset"] <= offset
+            assert len(json.dumps(text[output["offset"] : offset], ensure_ascii=False)) - 2 <= capacity // 4
+            assert read[output["offset"] :] == page[: offset - output["offset"]]
+            read = read[: output["offset"]] + page
+            previous_start, offset, pages = output["offset"], output["next_offset"], pages + 1
+            assert pages <= len(text)
+
+        assert read == text
+
+    async def test_pages_overlap_even_at_a_long_paragraph_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The splitter alone repeats only the blank line when a paragraph is longer than the overlap (Litmus D3)."""
+        paragraph = "This fairly long sentence describes one precise maintenance step of the box. " * 4
+        text = "\n\n".join([paragraph] * 6)
+        first = await self._read(monkeypatch, text, 0)
+        second = await self._read(monkeypatch, text, first["next_offset"])
+
+        assert 20 < first["next_offset"] - second["offset"] <= 100
+
+    async def test_pages_never_shrink_before_a_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A page ending on a paragraph followed by one too long to fit must not make the next pages shrink."""
+        text = "A short closing paragraph of a few words.\n\n" + " ".join(["longword"] * 600)
+        offset, pages = 0, 0
+        while offset is not None:
+            output = await self._read(monkeypatch, text, offset)
+            assert output["next_offset"] is None or output["next_offset"] > offset
+            offset, pages = output["next_offset"], pages + 1
+
+        assert pages <= 8
+
+    async def test_the_page_estimate_matches_the_pages_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = await self._page(monkeypatch, 0)
+        pages, offset = 0, first["next_offset"]
+        while offset is not None:
+            offset = (await self._page(monkeypatch, offset))["next_offset"]
+            pages += 1
+        estimate = int(first["part"].split("about ")[1].split(" more")[0])
+
+        assert abs(estimate - pages) <= 1
+
+    @pytest.mark.regression
+    async def test_a_short_page_does_not_inflate_the_estimate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A page ending early on a paragraph said "about 2254 more pages" for a few (campaign r1, D-PAGES)."""
+        text = "A short closing paragraph of a few words.\n\n" + " ".join(["longword"] * 600)
+        first = await self._read(monkeypatch, text, 0)
+        pages, offset = 0, first["next_offset"]
+        while offset is not None:
+            offset = (await self._read(monkeypatch, text, offset))["next_offset"]
+            pages += 1
+        estimate = int(first["part"].split("about ")[1].split(" more")[0])
+
+        assert abs(estimate - pages) <= 1
+
+
+class _Writer:
+    """A stand-in writer model: streams one reply per section, keyed by its instructions (``write <key>``).
+
+    A reply is a text, streamed in two pieces, or an exception to raise. It records every request, the
+    peak number of calls in flight, and how many calls were cancelled. It only streams: a writer called
+    without streaming fails.
+    """
+
+    def __init__(self, replies: dict[str, list[Any]], delay: float = 0.0) -> None:
+        self.replies = replies
+        self.delay = delay
+        self.requests: list[list[Message]] = []
+        self.in_flight = 0
+        self.peak = 0
+        self.cancelled = 0
+
+    async def ainvoke_stream(self, messages: list[Message], assistant_message: Message) -> AsyncIterator[ModelResponse]:
+        assert assistant_message.role == "assistant"
+        self.requests.append(messages)
+        key = str(messages[1].content).rsplit("\n", 1)[-1].removeprefix("write ")
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        finally:
+            self.in_flight -= 1
+        reply = self.replies[key].pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        half = len(reply) // 2
+        yield ModelResponse(content=reply[:half])
+        yield ModelResponse(reasoning_content="not part of the section")
+        yield ModelResponse(content=reply[half:])
+
+
+class TestGenerate:
+    """``generate`` writes every section with its own model call and saves them as one version (DEV-938)."""
+
+    @staticmethod
+    async def _service(
+        writer: _Writer | None, content: dict[str, Any] | None = None
+    ) -> tuple[ServicesManager, DefaultSetup, str]:
+        setup, registry = _stores()
+        manager = ServicesManager(setup, registry)
+        if writer is not None:
+            manager.bind_writer(writer)  # type: ignore[arg-type]
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="Shop", content=content or {"title": "x"}, structure={"title": "the name"})
+            )
+        )
+        return manager, setup, created["output"]["setup_id"]
+
+    @staticmethod
+    def _section(path: str, key: str, summary: str = "") -> ServiceSection:
+        return ServiceSection(path=path, instructions=f"write {key}", summary=summary or f"about {path}")
+
+    @staticmethod
+    def _products(start: int, count: int) -> str:
+        return json.dumps([{"id": index} for index in range(start, start + count)])
+
+    async def test_sections_are_merged_into_one_version(self) -> None:
+        writer = _Writer({
+            "first": [self._products(0, 12)],
+            "second": [self._products(12, 12)],
+            "intro": ['"Welcome"'],
+        })
+        manager, setup, setup_id = await self._service(writer, {"title": "x", "products": []})
+
+        env = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="a shop",
+                    sections=[
+                        self._section("products", "first", "catalog, each {id}"),
+                        self._section("products", "second", "catalog, each {id}"),
+                        self._section("intro", "intro", "the welcome text"),
+                    ],
+                )
+            )
+        )
+
+        version = setup.setups[setup_id].current_setup_version
+        assert sorted(item["id"] for item in version.content["products"]) == list(range(24))
+        assert version.content["intro"] == "Welcome"
+        assert version.structure == {"title": "the name", "products": "catalog, each {id}", "intro": "the welcome text"}
+        assert _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"] == 2
+        output = env["output"]
+        assert output["setup_version_id"] == version.id
+        assert output["sections"][0] == {
+            "section": 0,
+            "path": "products",
+            "chars": len(self._products(0, 12)),
+            "items": 12,
+        }
+        assert output["failed"] == []
+        assert "Welcome" not in json.dumps(output)
+
+    async def test_a_described_list_keeps_its_entry(self) -> None:
+        """A retry pushing one slice onto a list must not replace the whole list's description by the slice's."""
+        writer = _Writer({"slice": [self._products(0, 2)]})
+        setup, registry = _stores()
+        manager = ServicesManager(setup, registry)
+        manager.bind_writer(writer)  # type: ignore[arg-type]
+        setup_id = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="Shop", content={"products": []}, structure={"products": "the catalog"})
+            )
+        )["output"]["setup_id"]
+
+        await manager.services_manager(
+            GenerateServiceAction(
+                setup_id=setup_id, brief="b", sections=[self._section("products", "slice", "products P441 to P450")]
+            )
+        )
+
+        assert setup.setups[setup_id].current_setup_version.structure == {"products": "the catalog"}
+
+    async def test_500_items_are_all_pushed(self) -> None:
+        writer = _Writer({f"part{index:02d}": [self._products(index * 12, 12)] for index in range(42)})
+        manager, setup, setup_id = await self._service(writer, {"products": []})
+
+        await manager.services_manager(
+            GenerateServiceAction(
+                setup_id=setup_id,
+                brief="a shop",
+                sections=[self._section("products", f"part{index:02d}") for index in range(42)],
+            )
+        )
+
+        assert len(setup.setups[setup_id].current_setup_version.content["products"]) == 504
+
+    async def test_an_existing_non_list_is_replaced(self) -> None:
+        writer = _Writer({"title": ['"Better title"']})
+        manager, setup, setup_id = await self._service(writer)
+
+        await manager.services_manager(
+            GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("title", "title")])
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content == {"title": "Better title"}
+
+    async def test_a_list_reply_on_a_missing_path_creates_the_list(self) -> None:
+        writer = _Writer({"items": [self._products(0, 3)]})
+        manager, setup, setup_id = await self._service(writer)
+
+        await manager.services_manager(
+            GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("catalog.products", "items")])
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content["catalog"] == {
+            "products": [{"id": 0}, {"id": 1}, {"id": 2}]
+        }
+
+    async def test_invalid_json_is_retried_once(self) -> None:
+        writer = _Writer({"intro": ["Sure! here it is", '"Welcome"']})
+        manager, setup, setup_id = await self._service(writer)
+
+        await manager.services_manager(
+            GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("intro", "intro")])
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content["intro"] == "Welcome"
+        assert len(writer.requests) == 2
+        assert "not valid JSON" in str(writer.requests[1][-1].content)
+
+    async def test_a_code_fence_is_unwrapped(self) -> None:
+        writer = _Writer({"intro": ['```json\n{"a": 1}\n```']})
+        manager, setup, setup_id = await self._service(writer)
+
+        await manager.services_manager(
+            GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("intro", "intro")])
+        )
+
+        assert setup.setups[setup_id].current_setup_version.content["intro"] == {"a": 1}
+
+    async def test_a_failed_section_is_reported_and_the_others_saved(self, caplog: pytest.LogCaptureFixture) -> None:
+        writer = _Writer({
+            "slow": [TimeoutError("cut by the proxy")],
+            "chatty": ["no json", "still no json"],
+            "intro": ['"Welcome"'],
+        })
+        manager, setup, setup_id = await self._service(writer)
+
+        with caplog.at_level("WARNING"):
+            output = _env(
+                await manager.services_manager(
+                    GenerateServiceAction(
+                        setup_id=setup_id,
+                        brief="b",
+                        sections=[
+                            self._section("a", "slow"),
+                            self._section("b", "chatty"),
+                            self._section("intro", "intro"),
+                        ],
+                    )
+                )
+            )["output"]
+
+        assert setup.setups[setup_id].current_setup_version.content == {"title": "x", "intro": "Welcome"}
+        assert [item["path"] for item in output["failed"]] == ["a", "b"]
+        assert [item["section"] for item in output["failed"]] == [0, 1]
+        assert [item["instructions"] for item in output["failed"]] == ["write slow", "write chatty"]
+        assert "cut by the proxy" in output["failed"][0]["reason"]
+        assert "JSON" in output["failed"][1]["reason"]
+        assert "split" in output["hint"].lower()
+        assert "write slow" in caplog.text
+        assert "write chatty" in caplog.text
+
+    async def test_failed_sections_on_one_list_are_told_apart(self) -> None:
+        """Sections filling one list share a path; the receipt names which ones failed, to redo only those."""
+        writer = _Writer({"p1": [self._products(0, 2)], "p2": ["x", "y"], "p3": [self._products(4, 2)]})
+        manager, _, setup_id = await self._service(writer, {"products": []})
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[self._section("products", key) for key in ("p1", "p2", "p3")],
+                )
+            )
+        )["output"]
+
+        assert output["failed"] == [
+            {
+                "section": 1,
+                "path": "products",
+                "instructions": "write p2",
+                "reason": output["failed"][0]["reason"],
+                "at": 2,
+            }
+        ]
+        assert [item["section"] for item in output["sections"]] == [0, 2]
+
+    async def test_all_sections_failed_saves_nothing(self) -> None:
+        writer = _Writer({"slow": [TimeoutError("cut")]})
+        manager, _setup, setup_id = await self._service(writer)
+
+        env = _env(
+            await manager.services_manager(
+                GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("a", "slow")])
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "cut" in env["error"]
+        assert _env(await manager.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"] == 1
+
+    async def test_concurrency_is_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_WRITER_CONCURRENCY", "2")
+        writer = _Writer({f"part{index}": ["1"] for index in range(6)}, delay=0.01)
+        manager, _, setup_id = await self._service(writer, {"numbers": []})
+
+        await manager.services_manager(
+            GenerateServiceAction(
+                setup_id=setup_id, brief="b", sections=[self._section("numbers", f"part{index}") for index in range(6)]
+            )
+        )
+
+        assert manager._ctx_data.writer.peak == 2  # type: ignore[union-attr]  # bind_writer keeps a copy
+        assert len(writer.requests) == 6
+
+    async def test_no_writer_is_refused(self) -> None:
+        manager, _, setup_id = await self._service(None)
+
+        env = _env(
+            await manager.services_manager(
+                GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("a", "a")])
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "model" in env["error"]
+
+    async def test_cancel_stops_pending_writers(self) -> None:
+        writer = _Writer({f"part{index}": ["1"] for index in range(3)}, delay=10)
+        manager, setup, setup_id = await self._service(writer)
+        before = setup.setups[setup_id].current_setup_version.id
+
+        task = asyncio.ensure_future(
+            manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[self._section(f"k{index}", f"part{index}") for index in range(3)],
+                )
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert manager._ctx_data.writer.cancelled == 3  # type: ignore[union-attr]  # bind_writer keeps a copy
+        assert setup.setups[setup_id].current_setup_version.id == before
+
+    async def test_a_mission_cancelled_mid_run_saves_nothing(self) -> None:
+        """A section refused because the mission was cancelled stops the whole write, not just that section."""
+        writer = _Writer({
+            "intro": ['"Welcome"'],
+            "late": [RunCancelledException("task cancelled before model request")],
+        })
+        manager, setup, setup_id = await self._service(writer)
+        before = setup.setups[setup_id].current_setup_version.id
+
+        env = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id, brief="b", sections=[self._section("intro", "intro"), self._section("x", "late")]
+                )
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert setup.setups[setup_id].current_setup_version.id == before
+
+    async def test_merge_uses_the_version_current_at_save_time(self) -> None:
+        writer = _Writer({"items": [self._products(0, 2)]}, delay=0.05)
+        manager, setup, setup_id = await self._service(writer, {"products": []})
+
+        generating = asyncio.ensure_future(
+            manager.services_manager(
+                GenerateServiceAction(setup_id=setup_id, brief="b", sections=[self._section("products", "items")])
+            )
+        )
+        await asyncio.sleep(0)
+        await manager.services_manager(
+            AppendServiceAction(setup_id=setup_id, path="products", value={"id": 99}, structure={})
+        )
+        await generating
+
+        assert sorted(item["id"] for item in setup.setups[setup_id].current_setup_version.content["products"]) == [
+            0,
+            1,
+            99,
+        ]
+
+    async def test_writer_prompt_carries_brief_outline_and_instructions(self) -> None:
+        writer = _Writer({"intro": ['"Welcome"'], "rules": ['"Be nice"']})
+        manager, _, setup_id = await self._service(writer)
+
+        await manager.services_manager(
+            GenerateServiceAction(
+                setup_id=setup_id,
+                brief="A shop for owls",
+                sections=[
+                    self._section("intro", "intro", "the welcome"),
+                    self._section("rules", "rules", "house rules"),
+                ],
+            )
+        )
+
+        prompt = str(writer.requests[0][1].content)
+        assert "A shop for owls" in prompt
+        assert "- intro: the welcome" in prompt
+        assert "- rules: house rules" in prompt
+        assert "`intro`" in prompt
+        assert "write intro" in prompt
+        assert "JSON" in str(writer.requests[0][0].content)
+
+
+class TestGenerateSectionLayout:
+    """``generate`` keeps every section where it belongs: no part inside another, slices redone in place (review)."""
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(("outer", "inner"), [("catalog", "catalog.products"), ("items", "items[0].name")])
+    async def test_nested_sections_are_refused_before_any_writer_call(self, outer: str, inner: str) -> None:
+        """A section inside another one was overwritten by it and still reported written (review B3)."""
+        writer = _Writer({"outer": ['{"a": 1}'], "inner": ['"x"']})
+        manager, _, setup_id = await TestGenerate._service(writer)
+
+        env = _env(
+            await manager.services_manager(
+                action={  # type: ignore[arg-type]
+                    "action": "generate",
+                    "setup_id": setup_id,
+                    "brief": "b",
+                    "sections": [
+                        {"path": inner, "instructions": "write inner", "summary": "s"},
+                        {"path": outer, "instructions": "write outer", "summary": "s"},
+                    ],
+                }
+            )
+        )
+
+        assert env["metadata"]["success"] is False
+        assert inner in env["error"]
+        assert outer in env["error"]
+        assert writer.requests == []
+
+    @pytest.mark.regression
+    async def test_a_second_section_on_one_value_fails_instead_of_overwriting(self) -> None:
+        """Two sections on one non-list path: the last one silently replaced the first (review B3)."""
+        writer = _Writer({"first": ['"first text"'], "second": ['"second text"']})
+        manager, setup, setup_id = await TestGenerate._service(writer)
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[TestGenerate._section("intro", "first"), TestGenerate._section("intro", "second")],
+                )
+            )
+        )["output"]
+
+        assert setup.setups[setup_id].current_setup_version.content["intro"] == "first text"
+        assert [(item["section"], item["path"]) for item in output["sections"]] == [(0, "intro")]
+        assert [(item["section"], item["path"]) for item in output["failed"]] == [(1, "intro")]
+        assert "already wrote" in output["failed"][0]["reason"]
+
+    @pytest.mark.regression
+    async def test_failed_slices_redone_with_at_land_in_order(self) -> None:
+        """A redone slice was pushed after the later ones: the chapters ended out of order (DEV-981 run, B4)."""
+        writer = _Writer(
+            {
+                "s0": [TestGenerate._products(0, 2)],
+                "s1": [ValueError("boom")],
+                "s2": [ValueError("boom")],
+                "s3": [TestGenerate._products(6, 2)],
+                "redo1": [TestGenerate._products(2, 2)],
+                "redo2": [TestGenerate._products(4, 2)],
+            },
+            delay=0.0,
+        )
+        manager, setup, setup_id = await TestGenerate._service(writer, {"products": []})
+
+        first = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[TestGenerate._section("products", f"s{index}") for index in range(4)],
+                )
+            )
+        )["output"]
+        assert [item["at"] for item in first["failed"]] == [2, 2]
+        await manager.services_manager(
+            GenerateServiceAction(
+                setup_id=setup_id,
+                brief="b",
+                sections=[
+                    ServiceSection(
+                        path="products", instructions="write redo1", summary="s", at=first["failed"][0]["at"]
+                    ),
+                    ServiceSection(
+                        path="products", instructions="write redo2", summary="s", at=first["failed"][1]["at"]
+                    ),
+                ],
+            )
+        )
+
+        products = setup.setups[setup_id].current_setup_version.content["products"]
+        assert [item["id"] for item in products] == list(range(8))
+
+    async def test_at_on_a_value_that_is_not_a_list_fails_the_section(self) -> None:
+        writer = _Writer({"intro": ['"Welcome"'], "title": ['"T"']})
+        manager, setup, setup_id = await TestGenerate._service(writer)
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[
+                        ServiceSection(path="title", instructions="write title", summary="s", at=0),
+                        TestGenerate._section("intro", "intro"),
+                    ],
+                )
+            )
+        )["output"]
+
+        assert [item["path"] for item in output["failed"]] == ["title"]
+        assert "list" in output["failed"][0]["reason"]
+        assert setup.setups[setup_id].current_setup_version.content["title"] == "x"
+
+    @pytest.mark.regression
+    async def test_concurrency_is_bounded_across_parallel_generates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The writer limit was per call: two parallel generates ran twice the limit against the proxy (B9)."""
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_WRITER_CONCURRENCY", "2")
+        writer = _Writer({f"part{index}": ["1"] for index in range(8)}, delay=0.01)
+        manager, _, setup_id = await TestGenerate._service(writer, {"numbers": []})
+
+        await asyncio.gather(
+            *(
+                manager.services_manager(
+                    GenerateServiceAction(
+                        setup_id=setup_id,
+                        brief="b",
+                        sections=[
+                            TestGenerate._section("numbers", f"part{index}") for index in range(start, start + 4)
+                        ],
+                    )
+                )
+                for start in (0, 4)
+            )
+        )
+
+        assert manager._ctx_data.writer.peak == 2  # type: ignore[union-attr]  # bind_writer keeps a copy
+        assert len(writer.requests) == 8
+
+
+class TestServiceWriteLockScope:
+    """The per-service lock serializes one service only, and a cancelled write never holds it (review)."""
+
+    async def test_two_services_never_wait_on_each_other(self) -> None:
+        setup, registry = _stores()
+        manager = ServicesManager(setup, registry)
+        first, second = [
+            _env(await manager.services_manager(CreateServiceAction(name=name, content={"items": []}, structure={})))[
+                "output"
+            ]["setup_id"]
+            for name in ("A", "B")
+        ]
+        write, release = setup.update_setup, asyncio.Event()
+
+        async def held_write(data: dict[str, Any]) -> SetupData:
+            if data["setup_id"] == first:
+                await release.wait()
+            return await write(data)
+
+        setup.update_setup = held_write  # type: ignore[method-assign]
+        held = asyncio.ensure_future(
+            manager.services_manager(AppendServiceAction(setup_id=first, path="items", value=1, structure={}))
+        )
+        await asyncio.sleep(0)
+
+        other = await asyncio.wait_for(
+            manager.services_manager(AppendServiceAction(setup_id=second, path="items", value=2, structure={})), 1
+        )
+
+        assert _env(other)["metadata"]["success"] is True, "service B wrote while service A held its lock"
+        release.set()
+        assert _env(await held)["metadata"]["success"] is True
+
+    async def test_a_write_cancelled_while_waiting_frees_the_service(self) -> None:
+        manager, setup, setup_id = await TestServiceWriteLock._yielding_service({"items": []})
+        write, release = setup.update_setup, asyncio.Event()
+
+        async def held_write(data: dict[str, Any]) -> SetupData:
+            await release.wait()
+            return await write(data)
+
+        setup.update_setup = held_write  # type: ignore[method-assign]
+        holder = asyncio.ensure_future(
+            manager.services_manager(AppendServiceAction(setup_id=setup_id, path="items", value="kept", structure={}))
+        )
+        waiter = asyncio.ensure_future(
+            manager.services_manager(AppendServiceAction(setup_id=setup_id, path="items", value="lost", structure={}))
+        )
+        await asyncio.sleep(0.01)
+        waiter.cancel()
+        release.set()
+        await holder
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        after = await asyncio.wait_for(
+            manager.services_manager(AppendServiceAction(setup_id=setup_id, path="items", value="next", structure={})),
+            1,
+        )
+
+        assert _env(after)["metadata"]["success"] is True, "the cancelled waiter did not keep the lock"
+        assert setup.setups[setup_id].current_setup_version.content["items"] == ["kept", "next"]
+
+
+class _OutOfOrderWriter(_Writer):
+    """A writer whose sections finish in the reverse of their start order."""
+
+    def __init__(self, replies: dict[str, list[Any]], delays: dict[str, float]) -> None:
+        super().__init__(replies)
+        self.delays = delays
+
+    async def ainvoke_stream(self, messages: list[Message], assistant_message: Message) -> AsyncIterator[ModelResponse]:
+        key = str(messages[1].content).rsplit("\n", 1)[-1].removeprefix("write ")
+        await asyncio.sleep(self.delays[key])
+        async for chunk in super().ainvoke_stream(messages, assistant_message):
+            yield chunk
+
+
+class TestGenerateOrderAndMarkers:
+    """``generate`` keeps the section order whatever finishes first, and logs its validation markers."""
+
+    @pytest.mark.regression
+    async def test_slices_land_in_section_order_not_completion_order(self) -> None:
+        writer = _OutOfOrderWriter(
+            {f"s{index}": [TestGenerate._products(index * 3, 3)] for index in range(4)},
+            {"s0": 0.04, "s1": 0.03, "s2": 0.02, "s3": 0.0},
+        )
+        manager, setup, setup_id = await TestGenerate._service(writer, {"products": []})
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[TestGenerate._section("products", f"s{index}") for index in range(4)],
+                )
+            )
+        )["output"]
+
+        ids = [item["id"] for item in setup.setups[setup_id].current_setup_version.content["products"]]
+        assert ids == list(range(12)), "sections are merged in their order, not as they finish"
+        assert [item["section"] for item in output["sections"]] == [0, 1, 2, 3]
+
+    async def test_writer_stream_and_generate_at_are_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        writer = _Writer({"first": [TestGenerate._products(0, 2)], "redo": [TestGenerate._products(2, 2)]})
+        manager, _, setup_id = await TestGenerate._service(writer, {"products": []})
+
+        with caplog.at_level("INFO"):
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id, brief="b", sections=[TestGenerate._section("products", "first")]
+                )
+            )
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[ServiceSection(path="products", instructions="write redo", summary="s", at=0)],
+                )
+            )
+
+        assert "[VALIDATE WRITER-STREAM]" in caplog.text
+        assert "[VALIDATE GENERATE-AT]" in caplog.text
+
+
+class TestValidateMarkers:
+    """Each read and receipt fix logs its production validation marker (docs/validation_checklist.md)."""
+
+    async def test_staged_and_set_version_receipts_log_their_markers(self, caplog: pytest.LogCaptureFixture) -> None:
+        manager, setup_id = await TestWriteReceipts._service()
+
+        with caplog.at_level("INFO"):
+            staged = _env(
+                await manager.services_manager(
+                    PatchServiceAction(
+                        setup_id=setup_id, path="products[0]", value="x", structure={}, set_as_current=False
+                    )
+                )
+            )["output"]
+            await manager.services_manager({
+                "action": "set_version",
+                "setup_id": setup_id,
+                "setup_version_id": staged["setup_version_id"],
+            })
+
+        assert "[VALIDATE STAGED-RECEIPT]" in caplog.text
+        assert "[VALIDATE SET-VERSION-RECEIPT]" in caplog.text
+
+    async def test_text_pages_log_their_estimate_and_fit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("DIGITALKIN_SERVICES_MANAGER_LOAD_PAGE_CHARS", "300")
+        setup, registry = _stores()
+        created = await setup.create_setup({"name": "N", "content": {"notes": '"' * 200}, "structure": {}})
+        manager = ServicesManager(setup, registry)
+
+        with caplog.at_level("INFO"):
+            await manager.services_manager(LoadServiceAction(setup_id=created.id, key="notes", offset=0))
+
+        assert "[VALIDATE PAGE-ESTIMATE]" in caplog.text
+        assert "[VALIDATE TEXT-PAGE-FIT]" in caplog.text
+
+    async def test_a_refused_escaped_text_logs_its_marker(self, caplog: pytest.LogCaptureFixture) -> None:
+        manager, setup_id = await TestEscapedTextIsRefused._service()
+
+        with caplog.at_level("WARNING"):
+            await TestEscapedTextIsRefused._call(
+                manager,
+                {"action": "patch", "setup_id": setup_id, "path": "note", "value": "a\\nb\\nc", "structure": {}},
+            )
+
+        assert "[VALIDATE ESCAPED-TEXT-REFUSED]" in caplog.text
+
+
+class TestWriterModel:
+    """The generate writer is a copy of the agent's model: same request settings, no history compactor.
+
+    Its reasoning is the agent's, untouched: the writer serves any kin's model, reasoning or not.
+    """
+
+    def test_the_writer_keeps_the_agent_request_settings(self) -> None:
+        model = SafeLiteLLM(id="claude-sonnet-5", request_params={"num_retries": 0}, compactor=Mock())
+        manager = ServicesManager(Mock(), Mock())
+
+        manager.bind_writer(model)
+
+        writer = manager._ctx_data.writer
+        assert isinstance(writer, SafeLiteLLM)
+        assert writer is not model
+        assert writer.compactor is None
+        assert writer.request_params == {"num_retries": 0}
+
+
+class TestEscapedTextIsRefused:
+    r"""A text a model escaped twice (``\\n``, ``\\u00e9`` written out) is refused before any write."""
+
+    @staticmethod
+    async def _call(manager: ServicesManager, action: dict[str, Any]) -> dict[str, Any]:
+        return _env(await manager.services_manager(action=action))  # type: ignore[arg-type]
+
+    @staticmethod
+    async def _service() -> tuple[ServicesManager, str]:
+        manager = ServicesManager(*_stores())
+        created = _env(
+            await manager.services_manager(
+                CreateServiceAction(name="N", content={"note": "x", "items": []}, structure={})
+            )
+        )
+        return manager, created["output"]["setup_id"]
+
+    async def test_append_refuses_an_escaped_text(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {
+                "action": "append",
+                "setup_id": setup_id,
+                "path": "note",
+                "value": "\\n\\nChapitre 2 : c\\u00e2blage",
+                "structure": {},
+            },
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_append_refuses_an_escaped_item(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "append", "setup_id": setup_id, "path": "items", "items": ["ok", "caf\\u00e9"], "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_patch_refuses_an_escaped_text(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "patch", "setup_id": setup_id, "path": "note", "value": "a\\nb\\nc", "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "escape sequences" in env["error"]
+
+    async def test_create_refuses_escaped_content(self) -> None:
+        env = await self._call(
+            ServicesManager(*_stores()),
+            {"action": "create", "name": "N", "content": {"notice": "c\\u00e2blage"}, "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is False
+        assert "'notice'" in env["error"]
+
+    async def test_a_real_text_is_appended(self) -> None:
+        manager, setup_id = await self._service()
+
+        env = await self._call(
+            manager,
+            {"action": "append", "setup_id": setup_id, "path": "note", "value": "\nDeuxième ligne", "structure": {}},
+        )
+
+        assert env["metadata"]["success"] is True
+
+    async def test_a_generated_escaped_section_fails(self) -> None:
+        writer = _Writer({"intro": ['"Chapitre 1 \\\\u00e9t\\\\u00e9"'], "title": ['"Clean title"']})
+        manager, setup, setup_id = await TestGenerate._service(writer)
+
+        output = _env(
+            await manager.services_manager(
+                GenerateServiceAction(
+                    setup_id=setup_id,
+                    brief="b",
+                    sections=[TestGenerate._section("intro", "intro"), TestGenerate._section("title", "title")],
+                )
+            )
+        )["output"]
+
+        assert [item["path"] for item in output["failed"]] == ["intro"]
+        assert "escape sequences" in output["failed"][0]["reason"]
+        assert setup.setups[setup_id].current_setup_version.content["title"] == "Clean title"
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "text", ["print('a\\nb\\nc')", "C:\\Users\\nina\\notes", "s = '\\u00e9'", "^\\d+\\n\\s*\\n$"]
+    )
+    async def test_intended_backslashes_are_kept_when_flagged(self, text: str) -> None:
+        """Code, a Windows path or a regex was refused with no way through (review 2026-11-24, B2)."""
+        manager, setup_id = await self._service()
+        call = {"action": "patch", "setup_id": setup_id, "path": "note", "value": text, "structure": {}}
+
+        refused = await self._call(manager, call)
+        kept = await self._call(manager, {**call, "literal_escapes": True})
+
+        assert refused["metadata"]["success"] is False
+        assert "literal_escapes" in refused["error"]
+        assert kept["metadata"]["success"] is True
+        loaded = _env(await manager.services_manager(LoadServiceAction(setup_id=setup_id, key="note")))["output"]
+        assert loaded == {"note": text}
+
+    async def test_create_keeps_flagged_code(self) -> None:
+        env = await self._call(
+            ServicesManager(*_stores()),
+            {
+                "action": "create",
+                "name": "N",
+                "content": {"snippet": "print('a\\nb\\nc')"},
+                "structure": {},
+                "literal_escapes": True,
+            },
+        )
+
+        assert env["metadata"]["success"] is True
+
+    @pytest.mark.regression
+    async def test_a_kin_prompt_with_backslashes_is_not_checked(self) -> None:
+        """The guard ran on every manager's ``content``: a kin prompt quoting code could not be saved."""
+        env = _env(
+            await KinsManager(*_stores()).kins_manager(
+                UpdateAction(setup_id="setups:isaac", name="Isaac", content={"agent": "use print('a\\nb\\nc')"})
+            )
+        )
+
+        assert env["metadata"]["success"] is True
+
+    def test_only_service_writes_offer_the_flag(self) -> None:
+        for action in (CreateServiceAction, UpdateServiceAction, PatchServiceAction, AppendServiceAction):
+            assert "literal_escapes" in action.model_json_schema()["properties"]
+        for action in (UpdateAction, LoadServiceAction, RemoveServiceAction, GetServiceAction):
+            assert "literal_escapes" not in action.model_json_schema()["properties"]
+
+    def test_value_is_typed_in_the_schema(self) -> None:
+        """An untyped ``value`` left the model free to send an escaped copy of a text."""
+        value = AppendServiceAction.model_json_schema()["properties"]["value"]
+
+        assert {"string", "number", "boolean", "array", "object", "null"} <= {
+            branch.get("type") for branch in value["anyOf"]
+        }
+
+
+class TestUpdateStructure:
+    """``update_structure`` merges map entries into a new version, leaving the content untouched."""
+
+    @staticmethod
+    async def _service() -> tuple[ServicesManager, DefaultSetup, str]:
+        setup, registry = _stores()
+        created = await setup.create_setup({
+            "name": "Shop",
+            "content": {"products": [{"id": "P1"}, {"id": "P2"}], "limits": {"max.tokens": 3}},
+            "structure": {"products": "Products P441 to P450", "products[1]": "old P2"},
+            "documentation": "doc",
+        })
+        return ServicesManager(setup, registry), setup, created.id
+
+    @staticmethod
+    async def _update(manager: ServicesManager, setup_id: str, entries: dict[str, str]) -> dict[str, Any]:
+        return _env(
+            await manager.services_manager(
+                action={"action": "update_structure", "setup_id": setup_id, "entries": entries}
+            )  # type: ignore[arg-type]
+        )
+
+    async def test_entries_are_merged_and_the_content_kept(self) -> None:
+        manager, setup, setup_id = await self._service()
+        before = setup.setups[setup_id].current_setup_version
+
+        env = await self._update(manager, setup_id, {"products[0]": "P1 drill", "products": "All 2 products"})
+
+        after = setup.setups[setup_id].current_setup_version
+        assert env["metadata"]["success"] is True
+        assert after.id != before.id
+        assert after.content == before.content
+        assert after.documentation == "doc"
+        assert after.structure == {"products": "All 2 products", "products[0]": "P1 drill", "products[1]": "old P2"}
+
+    async def test_batches_add_up(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[0]": "P1"})
+        await self._update(manager, setup_id, {"products[1]": "P2"})
+
+        structure = setup.setups[setup_id].current_setup_version.structure
+        assert (structure["products[0]"], structure["products[1]"]) == ("P1", "P2")
+
+    async def test_an_empty_description_removes_the_entry(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[1]": "", "products[9]": ""})
+
+        assert "products[1]" not in setup.setups[setup_id].current_setup_version.structure
+
+    async def test_an_unknown_path_is_refused_and_nothing_written(self) -> None:
+        manager, setup, setup_id = await self._service()
+        before = setup.setups[setup_id].current_setup_version.id
+
+        env = await self._update(manager, setup_id, {"products[0]": "ok", "products[7]": "no such item"})
+
+        assert env["metadata"]["success"] is False
+        assert "products[7]" in env["error"]
+        assert setup.setups[setup_id].current_setup_version.id == before
+
+    async def test_a_bracket_quoted_key_is_accepted(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        env = await self._update(manager, setup_id, {'limits["max.tokens"]': "token cap"})
+
+        assert env["metadata"]["success"] is True
+        assert setup.setups[setup_id].current_setup_version.structure['limits["max.tokens"]'] == "token cap"
+
+    async def test_a_long_description_is_clipped(self) -> None:
+        manager, setup, setup_id = await self._service()
+
+        await self._update(manager, setup_id, {"products[0]": "x" * 5000})
+
+        assert len(setup.setups[setup_id].current_setup_version.structure["products[0]"]) < 5000
+
+    async def test_the_receipt_carries_no_map(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        output = (await self._update(manager, setup_id, {"products[0]": "P1"}))["output"]
+
+        assert "structure" not in output
+        assert output["setup_id"] == setup_id
+
+    async def test_a_tool_setup_is_refused(self) -> None:
+        env = await self._update(ServicesManager(*_stores()), "setups:duda", {"secret": "x"})
+
+        assert env["metadata"]["success"] is False
+        assert "not a service setup" in env["error"]
+
+    async def test_entries_are_required(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        assert (await self._update(manager, setup_id, {}))["metadata"]["success"] is False
+
+    def test_update_structure_reaches_the_model(self) -> None:
+        function = ServicesManager(*_stores()).async_functions["services_manager"]
+
+        assert "UpdateStructureServiceAction" in json.loads(json.dumps(function.parameters))["$defs"]
+        assert "'update_structure'" in function.description
+
+    async def test_a_patch_refusal_points_at_update_structure(self) -> None:
+        manager, _, setup_id = await self._service()
+
+        env = _env(
+            await manager.services_manager(
+                action={  # type: ignore[arg-type]
+                    "action": "patch",
+                    "setup_id": setup_id,
+                    "path": "limits",
+                    "value": {"max.tokens": 3},
+                    "structure": {"products[0]": "P1"},
+                }
+            )
+        )
+
+        assert "use update_structure" in env["error"]
 
 
 class TestDisplayLabels:
@@ -1670,6 +4217,11 @@ class TestDisplayLabels:
             StructureServiceAction,
             LoadServiceAction,
             UpdateServiceAction,
+            PatchServiceAction,
+            AppendServiceAction,
+            RemoveServiceAction,
+            GetServiceAction,
+            GenerateServiceAction,
         ):
             assert cls.display_name
             assert "_" not in cls.display_name
