@@ -71,6 +71,7 @@ from digitalkin.models.events import (
     ReasoningStepEvent,
     RunCompletedEvent,
     RunContentEvent,
+    RunErrorCode,
     RunErrorEvent,
     RunStartedEvent,
     SourceCitation,
@@ -523,6 +524,85 @@ class AgnoStreamAdapter:
         )
         return events
 
+    @staticmethod
+    def _error_code(error_type: str | None, content: Any) -> RunErrorCode:  # ruff: ignore[too-many-return-statements] - one return per mapped slug
+        """Map agno's ``error_type`` to a :class:`RunErrorCode`.
+
+        ``SafeLiteLLM`` already raises with a code; agno's own slugs are translated; anything else
+        (an exception class name) becomes ``UNKNOWN`` and is logged with its text.
+
+        Args:
+            error_type: agno's error type: a code, an agno slug, a class name, or None.
+            content: The error text, logged when the type is unmapped.
+
+        Returns:
+            The code to emit.
+        """
+        if error_type is None:
+            return RunErrorCode.UNKNOWN
+        try:
+            return RunErrorCode(error_type)
+        except ValueError:
+            pass
+        match error_type:
+            case "input_check_error":
+                return RunErrorCode.INPUT_REJECTED
+            case "output_check_error":
+                return RunErrorCode.OUTPUT_REJECTED
+            case "run_cancelled_error":
+                return RunErrorCode.RUN_CANCELLED
+            case "model_authentication_error":
+                return RunErrorCode.MODEL_AUTHENTICATION_FAILED
+            case "model_provider_error":
+                # agno's event drops the status code (rate limits and overflows included), so the provider's
+                # wording is all that is left; a failure that names no cause gets no retryable hint
+                from agno.exceptions import ModelProviderError
+
+                text = str(content).lower()
+                code = next(
+                    (
+                        candidate
+                        for candidate, patterns in (
+                            (RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED, ModelProviderError.CONTEXT_WINDOW_PATTERNS),
+                            (RunErrorCode.MODEL_OVERLOADED, ("overloaded",)),
+                            (
+                                RunErrorCode.MODEL_RATE_LIMITED,
+                                (
+                                    "rate limit",
+                                    "rate_limit",
+                                    "ratelimit",
+                                    "too many requests",
+                                    "resource_exhausted",
+                                    "resource exhausted",
+                                    "quota",
+                                ),
+                            ),
+                            (RunErrorCode.MODEL_TIMEOUT, ("timed out", "timeout")),
+                            (RunErrorCode.MODEL_NOT_FOUND, ("not_found", "not found", "does not exist")),
+                            (
+                                RunErrorCode.MODEL_PERMISSION_DENIED,
+                                ("permission_denied", "permission denied", "forbidden"),
+                            ),
+                            (RunErrorCode.MODEL_REQUEST_INVALID, ("invalid_request", "bad request", "badrequest")),
+                            (
+                                RunErrorCode.MODEL_UNAVAILABLE,
+                                ("unavailable", "internal server error", "bad gateway", "connection", "server error"),
+                            ),
+                        )
+                        if any(pattern in text for pattern in patterns)
+                    ),
+                    RunErrorCode.UNKNOWN,
+                )
+                # TODO(validate): RUN-ERROR-CODE-AGNO-PROVIDER a native agno model's failure reaches RUN_ERROR with
+                # the code its wording names; one that names no cause is UNKNOWN
+                logger.warning("[VALIDATE RUN-ERROR-CODE-AGNO-PROVIDER] %s: %s", code.value, content)
+                return code
+            case _:
+                # TODO(validate): RUN-ERROR-CODE-UNMAPPED no agno error type reaches the client unmapped;
+                # extend the enum for any that do
+                logger.warning("[VALIDATE RUN-ERROR-CODE-UNMAPPED] %s: %s", error_type, content)
+                return RunErrorCode.UNKNOWN
+
     def _handle_run_error(self, agno_event: AgnoRunErrorEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_error.
 
@@ -545,7 +625,7 @@ class AgnoStreamAdapter:
                     event=AgentRunEvent.SUBAGENT_ERROR,
                     subagent_run_id=run_id,
                     message=str(content) if content else "subagent run failed",
-                    code=agno_event.error_type,
+                    code=self._error_code(agno_event.error_type, content),
                     timestamp=timestamp,
                     metadata=subagent[1],
                 )
@@ -573,7 +653,7 @@ class AgnoStreamAdapter:
         events.append(
             RunErrorEvent(
                 event=AgentRunEvent.RUN_ERROR,
-                error_type=agno_event.error_type,
+                error_type=self._error_code(agno_event.error_type, content),
                 content=str(content) if content else None,
                 error_details=None,
                 timestamp=timestamp,

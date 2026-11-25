@@ -22,7 +22,7 @@ from agno.tools.function import Function
 from digitalkin.community.agno.hitl import AgnoHitlRunner
 from digitalkin.community.agno.models import PauseInfo
 from digitalkin.community.agno.toolkits import DkToolkit, LoadManager
-from digitalkin.models.events import ToolCallStartedEvent
+from digitalkin.models.events import RunErrorCode, ToolCallStartedEvent
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.services.registry import RegistryModuleType
 
@@ -266,7 +266,9 @@ class TestPausedToolHandling:
     def test_pending_external_reflects_unresolved_tools(self) -> None:
         runner = _runner()
         assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result=None)], requirements=[])) is True
-        assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result="done")], requirements=[])) is False
+        assert (
+            runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result="done")], requirements=[])) is False
+        )
 
 
 class _FakeAdapter:
@@ -416,7 +418,7 @@ class TestDriveAutoContinue:
         store.save.assert_not_called()
         errors = [c.args[0] for c in send.await_args_list if c.args[0].event == AgentRunEvent.RUN_ERROR]
         assert len(errors) == 1
-        assert errors[0].error_type == "auto_continue_limit"
+        assert errors[0].error_type == RunErrorCode.AUTO_CONTINUE_LIMIT
         assert loader.run_paused.await_count == AgnoHitlRunner.MAX_AUTO_CONTINUES == 100
 
 
@@ -688,7 +690,11 @@ class TestToolLabels:
             seen=[],
         )
         agent = Agent(
-            name="agent", model=model, tools=AguiTools.make_tools_factory(base_tools), cache_callables=False, telemetry=False
+            name="agent",
+            model=model,
+            tools=AguiTools.make_tools_factory(base_tools),
+            cache_callables=False,
+            telemetry=False,
         )
         runner = AgnoHitlRunner(
             agent=agent,
@@ -745,6 +751,8 @@ class TestToolLabels:
         def factory(run_context: Any) -> list[Any]:
             return run_context.dependencies["tools"]
 
-        runner = AgnoHitlRunner(agent=SimpleNamespace(tools=factory), store=SimpleNamespace(), tool_loader=LoadManager())
+        runner = AgnoHitlRunner(
+            agent=SimpleNamespace(tools=factory), store=SimpleNamespace(), tool_loader=LoadManager()
+        )
 
         assert runner._toolkit_map() == {}

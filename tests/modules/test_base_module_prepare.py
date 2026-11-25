@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from digitalkin.models.events import RunErrorCode
+
 pytestmark = [pytest.mark.timeout(15)]
 
 
@@ -171,7 +173,7 @@ class TestStartHandlesPrepareFailure:
         # ModuleCodeModel error should have been sent through the callback.
         cb.assert_called_once()
         sent = cb.call_args.args[0]
-        assert sent.code == "Error"
+        assert sent.code == RunErrorCode.MODULE_INIT_FAILED
         assert "ValueError" in sent.message
         # _run_lifecycle must not have been entered.
         m._run_lifecycle.assert_not_called()  # noqa: SLF001

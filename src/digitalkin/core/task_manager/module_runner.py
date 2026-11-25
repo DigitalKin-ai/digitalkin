@@ -19,6 +19,7 @@ from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.events import RunErrorCode
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
 from digitalkin.models.module.ag_ui import AgUiOutput, AgUiRunErrorOutput
 from digitalkin.models.module.base_types import DataModel
@@ -330,9 +331,11 @@ class ModuleRunner:
                 await _on_output(
                     AgUiOutput(
                         root=AgUiRunErrorOutput(
-                            event=RunErrorEvent(
-                                message="invalid run input", code=StreamErrorCode.INPUT_VALIDATION_ERROR.value
-                            )
+                            event=RunErrorEvent.model_validate({
+                                "message": "invalid run input",
+                                "code": RunErrorCode.INPUT_INVALID,
+                                "metadata": {"retryable": RunErrorCode.INPUT_INVALID.retryable},
+                            })
                         )
                     )
                 )

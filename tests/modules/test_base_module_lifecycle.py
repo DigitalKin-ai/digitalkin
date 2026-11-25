@@ -5,6 +5,7 @@ run, _run_lifecycle, start, stop, _resolve_tools, start_config_setup.
 """
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -12,6 +13,8 @@ import pytest
 from pydantic import BaseModel, Field
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
+from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.events import RunErrorCode
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.models.module.tool_cache import ToolCache
@@ -372,7 +375,7 @@ class TestRunLifecycle:
         module.context.callbacks.send_message.assert_awaited_once()
         sent = module.context.callbacks.send_message.call_args[0][0]
         assert isinstance(sent, ModuleCodeModel)
-        assert sent.code == "PermissionDenied"
+        assert sent.code == RunErrorCode.PERMISSION_DENIED
         assert sent.message == "denied"
 
     @pytest.mark.unit
@@ -442,7 +445,7 @@ class TestStart:
         # Error callback sends ModuleCodeModel
         error_call = callback.call_args_list[0]
         assert isinstance(error_call[0][0], ModuleCodeModel)
-        assert error_call[0][0].code == "Error"
+        assert error_call[0][0].code == RunErrorCode.MODULE_INIT_FAILED
 
     @pytest.mark.unit
     async def test_init_permission_denied_sends_code(self) -> None:
@@ -464,7 +467,7 @@ class TestStart:
         assert module.status == ModuleStatus.FAILED
         sent = callback.call_args_list[0][0][0]
         assert isinstance(sent, ModuleCodeModel)
-        assert sent.code == "PermissionDenied"
+        assert sent.code == RunErrorCode.PERMISSION_DENIED
         done_callback.assert_awaited_once_with(None)
 
     async def test_init_error_with_done_callback(self) -> None:
@@ -526,20 +529,21 @@ class TestStop:
         assert sent.root.protocol == "stream.end"
 
     async def test_cancelled_status_emits_stream_cancelled_before_end(self) -> None:
-        """A cancelled module tells the front: ``stream.cancelled`` then ``stream.end``."""
+        """A cancelled module tells the front: ``stream.cancelled`` with its session's cause, then ``stream.end``."""
         cls = _make_module_cls()
         module = _instantiate(cls)
         module.context.callbacks.send_message = AsyncMock()
         module._status = ModuleStatus.CANCELLED
+        module.task_session = SimpleNamespace(cancel_cause=lambda: CancellationReason.SIGNAL_SERVICE_CANCEL)
 
         with patch.object(module, "cleanup", new_callable=AsyncMock):
             await module.stop()
 
         sent = [c.args[0] for c in module.context.callbacks.send_message.await_args_list]
         assert [m.root.protocol for m in sent] == ["stream.cancelled", "stream.end"]
-        assert sent[0].root.reason == "cancelled"
+        assert sent[0].root.reason == "signal_service_cancel"
         root = sent[0].model_dump(mode="json")["root"]
-        assert (root["protocol"], root["reason"]) == ("stream.cancelled", "cancelled")
+        assert (root["protocol"], root["reason"]) == ("stream.cancelled", "signal_service_cancel")
         assert module.status == ModuleStatus.STOPPED
 
     async def test_cancel_reason_argument_emits_stream_cancelled(self) -> None:
@@ -669,7 +673,9 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
+        with patch.object(
+            type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()
+        ) as mock_build:
             await module._resolve_tools(setup_data)
 
         mock_build.assert_awaited_once_with(
@@ -687,7 +693,9 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
+        with patch.object(
+            type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()
+        ) as mock_build:
             await module._resolve_tools(setup_data)
 
         mock_build.assert_awaited_once_with(None, module.context.communication)
@@ -701,7 +709,9 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
+        with patch.object(
+            type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()
+        ) as mock_build:
             await module._resolve_tools(setup_data)
 
         mock_build.assert_awaited_once_with(module.context.registry, None)

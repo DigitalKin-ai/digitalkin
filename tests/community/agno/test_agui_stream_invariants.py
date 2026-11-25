@@ -44,7 +44,7 @@ class _Wire:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
         self.callbacks = types.SimpleNamespace(send_message=self.send_message, logger=MagicMock())
-        self.session = types.SimpleNamespace(current_ids=dict)
+        self.session = types.SimpleNamespace(current_ids=dict, job_id="task-invariants")
         self.storage = types.SimpleNamespace(read=AsyncMock(return_value=None))
         self.agui_run: Any = None
 
@@ -414,6 +414,7 @@ class TestStreamInvariants:
             "SUBAGENT_STARTED",
             "SUBAGENT_ERROR",
         ]
+        assert [e["code"] for e in events if e["type"] == "SUBAGENT_ERROR"] == ["UNKNOWN"]
 
     async def test_parallel_members_interleave_without_cross_closing(self) -> None:
         events = await _stream(

@@ -10,15 +10,20 @@ resolves the mission's cost service and price multiplier through :class:`CostReg
 
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import litellm
+from ag_ui.core.events import TokenUsage
 from litellm.integrations.custom_logger import CustomLogger
 from pydantic import BaseModel
 
 from digitalkin.community.litellm.registry import LiteLLMRegistry
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
+from digitalkin.mixins.agui_mixin import AgUiRunState
 from digitalkin.services.cost.cost_strategy import CostConfig
 
 if TYPE_CHECKING:
@@ -148,7 +153,7 @@ class CostTrackingLogger(CustomLogger):
         self,
         kwargs: dict[str, Any],
         response_obj: Any,
-        start_time: Any,  # ruff: ignore[unused-method-argument]
+        start_time: Any,
         end_time: Any,  # ruff: ignore[unused-method-argument]
     ) -> None:
         """Book the token cost of one completed call; never raises.
@@ -156,20 +161,21 @@ class CostTrackingLogger(CustomLogger):
         Args:
             kwargs: LiteLLM call details (model, litellm_params, metadata, ...).
             response_obj: The completed response (aggregated usage for streamed calls).
-            start_time: Call start time (unused).
+            start_time: Call start time (``datetime``), to tell a late report from a call made after the run.
             end_time: Call end time (unused).
         """
         try:
-            await self._track(kwargs, response_obj)
+            await self._track(kwargs, response_obj, start_time)
         except Exception:
             logger.exception("Cost tracking failed")
 
-    async def _track(self, kwargs: dict[str, Any], response_obj: Any) -> None:
-        """Resolve the call's mission and model, then book its usage.
+    async def _track(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any) -> None:
+        """Resolve the call's mission and model, then book its usage and count it toward the task's run.
 
         Args:
             kwargs: LiteLLM call details.
             response_obj: The completed response carrying ``usage``.
+            start_time: Call start time.
         """
         mission_id: str | None = None
         standard = kwargs.get("standard_logging_object")
@@ -179,13 +185,6 @@ class CostTrackingLogger(CustomLogger):
                 mission_id = str(metadata[self.MISSION_METADATA_KEY])
                 break
         if mission_id is None:
-            return
-        entry = CostRegistry.get(mission_id)
-        if entry is None:
-            logger.warning(
-                "LLM call of mission %s not billed: no cost service registered",
-                mission_id,
-            )
             return
         usage = response_obj.usage if response_obj is not None else None
         if usage is None:
@@ -206,6 +205,14 @@ class CostTrackingLogger(CustomLogger):
                 requested,
                 extra={"mission_id": mission_id},
             )
+        self.count_toward_run(usage, served or requested, spec, start_time)
+        entry = CostRegistry.get(mission_id)
+        if entry is None:
+            logger.warning(
+                "LLM call of mission %s not billed: no cost service registered",
+                mission_id,
+            )
+            return
         if spec is None:
             logger.warning(
                 "No pricing for model %s (served %s); cost not tracked",
@@ -215,6 +222,60 @@ class CostTrackingLogger(CustomLogger):
             )
             return
         await self._book(usage, spec, entry[0], entry[1], mission_id, deployment)
+
+    @classmethod
+    def count_toward_run(cls, usage: Any, model: str | None, spec: ModelSpec | None, start_time: Any) -> None:
+        """Count one call toward the AG-UI run of the task that made it; never raises, so billing goes on.
+
+        The callback task inherits the calling task's context, so the ambient task id is the caller's.
+
+        Args:
+            usage: LiteLLM ``Usage`` of the response.
+            model: The model that answered.
+            spec: Its spec, for the provider label.
+            start_time: Call start time (``datetime``), to tell a late report from a call made after the run.
+        """
+        task_id = RequestContext.current().get("task_id")
+        if not task_id:
+            return
+        try:
+            AgUiRunState.record_usage(
+                task_id,
+                cls.token_usage(usage, model, spec),
+                start_time.timestamp() if isinstance(start_time, datetime) else time.time(),
+            )
+        except Exception:
+            logger.exception("Run usage not recorded; the call is still billed", extra={"task_id": task_id})
+
+    @staticmethod
+    def token_usage(usage: Any, model: str | None, spec: ModelSpec | None) -> TokenUsage:
+        """Convert a LiteLLM ``Usage`` to the AG-UI ``TokenUsage`` of one call.
+
+        LiteLLM's ``prompt_tokens`` already counts cache reads and writes and ``completion_tokens``
+        reasoning, which is AG-UI's accounting: the detail counts are parts of the totals.
+
+        Args:
+            usage: LiteLLM ``Usage`` of the response.
+            model: The model that answered (the requested one when the route is unknown).
+            spec: Its spec, for the provider label; None leaves the provider out.
+
+        Returns:
+            The call's token counts.
+        """
+        prompt_details = CostTrackingLogger._as_dict(usage.prompt_tokens_details)
+        completion_details = CostTrackingLogger._as_dict(usage.completion_tokens_details)
+        input_tokens = usage.prompt_tokens or 0
+        output_tokens = usage.completion_tokens or 0
+        return TokenUsage(
+            provider=spec.provider.value if spec is not None else None,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            reasoning_tokens=completion_details.get("reasoning_tokens") or None,
+            cached_input_tokens=prompt_details.get("cached_tokens") or None,
+            cache_write_input_tokens=prompt_details.get("cache_creation_tokens") or None,
+        )
 
     @staticmethod
     def _as_dict(details: Any) -> dict[str, Any]:
@@ -245,8 +306,10 @@ class CostTrackingLogger(CustomLogger):
     ) -> None:
         """Split usage into cost categories and add each to the cost service.
 
-        ``prompt_tokens`` includes cache reads (not cache writes) and ``completion_tokens`` includes
-        reasoning, so both are subtracted out and every category is priced once.
+        ``prompt_tokens`` includes cache reads and cache writes, and ``completion_tokens`` includes
+        reasoning (litellm's own cost calculator subtracts them the same way), so each part is
+        subtracted from its total and every category is priced once: a cache write at its own rate
+        (1.25x input for Anthropic's 5-minute cache), a read at its own (0.1x or less).
 
         Args:
             usage: LiteLLM ``Usage`` of the response.
@@ -261,7 +324,7 @@ class CostTrackingLogger(CustomLogger):
         cached_read = prompt_details.get("cached_tokens") or 0
         cache_creation = prompt_details.get("cache_creation_tokens") or 0
         reasoning = completion_details.get("reasoning_tokens") or 0
-        non_cached_input = max((usage.prompt_tokens or 0) - cached_read, 0)
+        non_cached_input = max((usage.prompt_tokens or 0) - cached_read - cache_creation, 0)
         non_reasoning_output = max((usage.completion_tokens or 0) - reasoning, 0)
 
         costs = spec.costs
@@ -287,6 +350,16 @@ class CostTrackingLogger(CustomLogger):
                 credit(cached_read, costs.cache_read_input_token_cost or costs.input_cost_per_token, multiplier),
             )
         if cache_creation:
+            # TODO(validate): COST-CACHE-WRITE a cache write is billed once, at the cache-write price, and not
+            # again inside chatbot_input
+            logger.info(
+                "[VALIDATE COST-CACHE-WRITE] %d cache-write tokens billed once; prompt=%d cache_read=%d input=%d",
+                cache_creation,
+                usage.prompt_tokens or 0,
+                cached_read,
+                non_cached_input,
+                extra={"mission_id": mission_id},
+            )
             await cost.add(
                 "llm_cache_creation_tokens",
                 "chatbot_cache_creation_input",

@@ -49,7 +49,7 @@ class _Sink:
     def __init__(self) -> None:
         self.count = 0
         self.callbacks = types.SimpleNamespace(send_message=self.send_message, logger=logging.getLogger("bench"))
-        self.session = types.SimpleNamespace(current_ids=dict)
+        self.session = types.SimpleNamespace(current_ids=dict, job_id="task-perf")
         self.agui_run: Any = None
 
     async def send_message(self, output: Any) -> None:

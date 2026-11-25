@@ -25,10 +25,11 @@ from __future__ import annotations
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, cast
 from urllib.parse import urlsplit
 
 import litellm
+import openai
 from agno.exceptions import CheckTrigger, OutputCheckError, RunCancelledException
 from agno.models.litellm import LiteLLM
 from agno.models.message import Citations, Message, UrlCitation
@@ -42,7 +43,7 @@ from digitalkin.community.litellm.cost import CostTrackingLogger
 from digitalkin.community.litellm.registry import LiteLLMRegistry
 from digitalkin.community.litellm.settings import get_litellm_settings
 from digitalkin.logger import logger
-from digitalkin.models.events import ModelInfo
+from digitalkin.models.events import ModelInfo, RunErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -53,6 +54,38 @@ if TYPE_CHECKING:
 
     from digitalkin.community.agno.compaction import HistoryCompactor
     from digitalkin.community.litellm.model_specs import ModelSpec
+
+
+class ModelCallError(Exception):
+    """A provider failure classified into a :class:`RunErrorCode`.
+
+    agno's ``error_type_of`` reads ``type``, so the code reaches ``RUN_ERROR`` as the event's
+    ``error_type``.
+    """
+
+    def __init__(self, code: RunErrorCode, message: str) -> None:
+        """Keep the code next to the provider's message.
+
+        Args:
+            code: The classified failure.
+            message: Technical text, naming the model and carrying the provider's message.
+        """
+        super().__init__(message)
+        self.code = code
+        self.type = code.value
+
+
+class ContentFilteredError(OutputCheckError):
+    """A response the provider's content filter stopped; never retried, like any output check."""
+
+    def __init__(self, message: str) -> None:
+        """Tag the output check with ``MODEL_CONTENT_FILTERED``.
+
+        Args:
+            message: Technical text naming the model.
+        """
+        super().__init__(message, check_trigger=CheckTrigger.OUTPUT_NOT_ALLOWED)
+        self.type = RunErrorCode.MODEL_CONTENT_FILTERED.value
 
 
 @dataclass
@@ -231,16 +264,106 @@ class SafeLiteLLM(LiteLLM):
             response: A litellm response or streaming chunk.
 
         Raises:
-            OutputCheckError: If the first choice finished with ``content_filter``. agno does not
-                retry it and ends the run on a ``RunErrorEvent``.
+            ContentFilteredError: If the first choice finished with ``content_filter``: a Claude
+                refusal, a Gemini safety or recitation stop, a Bedrock guardrail or Azure
+                moderation. agno does not retry it and ends the run on a ``RunErrorEvent``.
         """
         choices = response.choices
         if choices and choices[0].finish_reason == "content_filter":
-            msg = (
-                f"The model ({self.id}) declined to answer this request (provider content filter). "
-                "Try rephrasing the request or switching to another model."
+            msg = f"The provider's content filter stopped the response (model={self.id})."
+            raise ContentFilteredError(msg)
+
+    @staticmethod
+    def error_code(exc: Exception) -> RunErrorCode | None:  # ruff: ignore[complex-structure, too-many-return-statements, too-many-branches] - one ordered case per code
+        """Classify a provider failure; subclasses are matched before their parents.
+
+        litellm erases a 529 into a 500 ``InternalServerError``, so an overload is recognised by
+        its text.
+
+        Args:
+            exc: The exception a request raised.
+
+        Returns:
+            The code, or None when ``exc`` is not a provider failure.
+        """
+        match exc:
+            case litellm.exceptions.ContentPolicyViolationError():
+                return RunErrorCode.MODEL_CONTENT_FILTERED
+            case litellm.exceptions.ContextWindowExceededError():
+                return RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED
+            case litellm.exceptions.PaymentRequiredError() | litellm.exceptions.BudgetExceededError():
+                return RunErrorCode.MODEL_BUDGET_EXCEEDED
+            case openai.BadRequestError() if SafeLiteLLM._is_overflow(exc):
+                return RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED
+            case openai.BadRequestError() | openai.UnprocessableEntityError():
+                return RunErrorCode.MODEL_REQUEST_INVALID
+            case openai.AuthenticationError():
+                return RunErrorCode.MODEL_AUTHENTICATION_FAILED
+            case openai.PermissionDeniedError():
+                return RunErrorCode.MODEL_PERMISSION_DENIED
+            case openai.NotFoundError():
+                return RunErrorCode.MODEL_NOT_FOUND
+            case openai.RateLimitError():
+                return RunErrorCode.MODEL_RATE_LIMITED
+            case openai.APITimeoutError():
+                return RunErrorCode.MODEL_TIMEOUT
+            case MidStreamFallbackError():
+                return RunErrorCode.MODEL_STREAM_INTERRUPTED
+            case openai.APIError() if "overloaded" in str(exc).lower():
+                return RunErrorCode.MODEL_OVERLOADED
+            case openai.APIError():
+                return RunErrorCode.MODEL_UNAVAILABLE
+            case _:
+                return None
+
+    @staticmethod
+    def _is_overflow(exc: Exception) -> bool:
+        """Report whether a rejection means the prompt exceeded the context window.
+
+        Through the proxy an overflow can arrive as a plain 400, so known provider wordings count too.
+
+        Args:
+            exc: The exception a request raised.
+
+        Returns:
+            True for a ``ContextWindowExceededError`` or a 400 worded as an overflow.
+        """
+        if isinstance(exc, ContextWindowExceededError):
+            return True
+        text = str(exc).lower()
+        return isinstance(exc, BadRequestError) and any(
+            marker in text
+            for marker in (
+                "prompt is too long",
+                "context window",
+                "context_length_exceeded",
+                "maximum context length",
+                "input is too long",
+                "too many tokens",
+                "exceed context limit",
+                "exceeds the maximum number of tokens",  # Gemini
+                "token count exceeds",  # Gemini
             )
-            raise OutputCheckError(msg, check_trigger=CheckTrigger.OUTPUT_NOT_ALLOWED)
+        )
+
+    def _raise_classified(self, exc: Exception) -> NoReturn:
+        """Re-raise a provider failure as a :class:`ModelCallError`, anything else unchanged.
+
+        Args:
+            exc: The exception a request raised.
+
+        Raises:
+            ModelCallError: When :meth:`error_code` classifies ``exc``.
+            Exception: ``exc`` itself otherwise.
+        """
+        code = self.error_code(exc)
+        if code is None:
+            raise exc
+        # TODO(validate): RUN-ERROR-CODE-MODEL provider failures reach RUN_ERROR as MODEL_* codes
+        logger.warning(
+            "[VALIDATE RUN-ERROR-CODE-MODEL] %s -> %s (model=%s): %s", type(exc).__name__, code.value, self.id, exc
+        )
+        raise ModelCallError(code, f"{self.id}: {exc}") from exc
 
     def _parse_provider_response(self, response: Any, **kwargs: Any) -> ModelResponse:
         """Parse a completion, raising on a refusal and keeping the URL citations.
@@ -381,13 +504,16 @@ class SafeLiteLLM(LiteLLM):
             "run_response": run_response,
             "compress_tool_results": compress_tool_results,
         }
-        first = await self._ainvoke_fitting(messages, assistant_message, kwargs)
-        if not self._is_empty_reply(first.content, first.tool_calls):
-            return first
+        try:
+            first = await self._ainvoke_fitting(messages, assistant_message, kwargs)
+            if not self._is_empty_reply(first.content, first.tool_calls):
+                return first
 
-        logger.warning("Empty model reply, retrying with a continuation prompt (model=%s)", self.id)
-        sent = await self._compacted(messages, kwargs)
-        retry = await self._ainvoke_once(self._with_continuation(sent), assistant_message, kwargs)
+            logger.warning("Empty model reply, retrying with a continuation prompt (model=%s)", self.id)
+            sent = await self._compacted(messages, kwargs)
+            retry = await self._ainvoke_once(self._with_continuation(sent), assistant_message, kwargs)
+        except Exception as exc:
+            self._raise_classified(exc)
         if first.response_usage is not None:
             retry.response_usage = (
                 first.response_usage if retry.response_usage is None else first.response_usage + retry.response_usage
@@ -432,23 +558,26 @@ class SafeLiteLLM(LiteLLM):
             "run_response": run_response,
             "compress_tool_results": compress_tool_results,
         }
-        for attempt in range(2):
-            if attempt:
-                logger.warning("Empty model reply, retrying with a continuation prompt (model=%s)", self.id)
-                stream = self._ainvoke_stream_once(
-                    self._with_continuation(await self._compacted(messages, kwargs)), assistant_message, kwargs
-                )
-            else:
-                stream = self._ainvoke_stream_fitting(messages, assistant_message, kwargs)
-            text: list[str] = []
-            has_tool_calls = False
-            async for chunk in stream:
-                if isinstance(chunk.content, str):
-                    text.append(chunk.content)
-                has_tool_calls = has_tool_calls or bool(chunk.tool_calls)
-                yield chunk
-            if not self._is_empty_reply("".join(text), has_tool_calls):
-                return
+        try:  # ruff: ignore[too-many-statements-in-try-clause] - both attempts' failures are classified
+            for attempt in range(2):
+                if attempt:
+                    logger.warning("Empty model reply, retrying with a continuation prompt (model=%s)", self.id)
+                    stream = self._ainvoke_stream_once(
+                        self._with_continuation(await self._compacted(messages, kwargs)), assistant_message, kwargs
+                    )
+                else:
+                    stream = self._ainvoke_stream_fitting(messages, assistant_message, kwargs)
+                text: list[str] = []
+                has_tool_calls = False
+                async for chunk in stream:
+                    if isinstance(chunk.content, str):
+                        text.append(chunk.content)
+                    has_tool_calls = has_tool_calls or bool(chunk.tool_calls)
+                    yield chunk
+                if not self._is_empty_reply("".join(text), has_tool_calls):
+                    return
+        except Exception as exc:
+            self._raise_classified(exc)
 
         logger.error("Model reply still empty after continuation retry (model=%s)", self.id)
         if self._should_notify_empty(response_format):
@@ -473,8 +602,6 @@ class SafeLiteLLM(LiteLLM):
     ) -> list[Message] | None:
         """Fold the history after the provider rejected the request as too long.
 
-        Through the proxy an overflow can arrive as a plain 400, so known provider wordings count too.
-
         Args:
             exc: The provider's 400.
             messages: Agno's messages for this call.
@@ -483,21 +610,8 @@ class SafeLiteLLM(LiteLLM):
         Returns:
             The messages to resend, or None when the rejection is not an overflow or nothing folds.
         """
-        if self.compactor is None:
+        if self.compactor is None or not self._is_overflow(exc):
             return None
-        if not isinstance(exc, ContextWindowExceededError):
-            text = str(exc).lower()
-            markers = (
-                "prompt is too long",
-                "context window",
-                "context_length_exceeded",
-                "maximum context length",
-                "input is too long",
-                "too many tokens",
-                "exceed context limit",
-            )
-            if not any(marker in text for marker in markers):
-                return None
         logger.warning("Request exceeded the context window, compacting the history and retrying (model=%s)", self.id)
         return await self.compactor.force_fold(messages, kwargs.get("tools"), kwargs.get("run_response"))
 

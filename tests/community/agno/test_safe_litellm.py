@@ -10,13 +10,13 @@ import litellm
 import pytest
 from agno.exceptions import RunCancelledException
 from agno.media import Image
+from agno.metrics import MessageMetrics
 from agno.models.litellm import LiteLLM
 from agno.models.message import Message
-from agno.metrics import MessageMetrics
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-from digitalkin.community.agno.safe_litellm import SafeLiteLLM
+from digitalkin.community.agno.safe_litellm import ModelCallError, SafeLiteLLM
 from digitalkin.models.events import ModelInfo
 
 EMPTY_RESPONSE_NOTICE = SafeLiteLLM.empty_response_notice
@@ -695,7 +695,7 @@ class TestUnfetchableImageUrls:
             litellm.APIConnectionError(message="Error code: 500 - upstream timeout", model="m", llm_provider="p")
         )
 
-        with pytest.raises(litellm.APIConnectionError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.APIConnectionError)):
             await _model_with(client).ainvoke(_mixed_turn(), Message(role="assistant"))
 
 
@@ -739,7 +739,7 @@ class TestImageRejectionFallback:
     async def test_rejection_without_images_in_the_request_is_raised(self) -> None:
         client = _FakeClient(_image_rejection())
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.BadRequestError)):
             await _model_with(client).ainvoke([Message(role="user", content="hi")], Message(role="assistant"))
         assert len(client.requests) == 1
 
@@ -749,7 +749,9 @@ class TestImageRejectionFallback:
         client = _FakeClient(error)
         model = _model_with(client)
 
-        with pytest.raises(litellm.BadRequestError, match="prompt is too long"):
+        with pytest.raises(
+            ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.BadRequestError), match="prompt is too long"
+        ):
             await model.ainvoke(_media_turn(), Message(role="assistant"))
         assert len(client.requests) == 1
         assert model.drop_images is False
@@ -758,7 +760,7 @@ class TestImageRejectionFallback:
     async def test_a_second_rejection_is_raised(self) -> None:
         client = _FakeClient(_image_rejection(), _image_rejection())
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.BadRequestError)):
             await _model_with(client).ainvoke(_media_turn(), Message(role="assistant"))
         assert len(client.requests) == 2
 
@@ -807,7 +809,7 @@ class TestImageRejectionFallback:
         client = _FakeClient(_MidStreamFailure())
         received: list[str] = []
 
-        with pytest.raises(litellm.BadRequestError):  # ruff: ignore[pytest-raises-with-multiple-statements]
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.BadRequestError)):  # ruff: ignore[pytest-raises-with-multiple-statements]
             async for chunk in _model_with(client).ainvoke_stream(_media_turn(), Message(role="assistant")):
                 received.append(chunk.content or "")  # ruff: ignore[manual-list-comprehension] - keep chunks seen before the error
         assert received == ["Partial"]
@@ -874,7 +876,9 @@ class _FakeCompactor:
         self.forced.append(messages)
         return [Message(role="user", content="REFOLDED VIEW"), *messages[-1:]] if self.refit else None
 
-    async def observe(self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True) -> None:
+    async def observe(
+        self, sent: list[Message], tools: object, provider_tokens: int, *, calibrate: bool = True
+    ) -> None:
         self.observed.append(provider_tokens)
         self.calibrated.append(calibrate)
 
@@ -974,7 +978,7 @@ class TestHistoryCompaction:
     async def test_an_overflow_nothing_can_fold_is_raised(self) -> None:
         client = _FakeClient(_overflow())
 
-        with pytest.raises(litellm.ContextWindowExceededError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.ContextWindowExceededError)):
             await _model_with(client, compactor=_FakeCompactor(refit=False)).ainvoke(
                 [Message(role="user", content="now")], Message(role="assistant")
             )
@@ -984,7 +988,7 @@ class TestHistoryCompaction:
     async def test_an_overflow_without_a_compactor_is_raised(self) -> None:
         client = _FakeClient(_overflow())
 
-        with pytest.raises(litellm.ContextWindowExceededError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.ContextWindowExceededError)):
             await _model_with(client).ainvoke([Message(role="user", content="now")], Message(role="assistant"))
 
     @pytest.mark.asyncio
@@ -992,7 +996,7 @@ class TestHistoryCompaction:
         client = _FakeClient(litellm.BadRequestError(message="invalid tool schema", model="m", llm_provider="p"))
         compactor = _FakeCompactor()
 
-        with pytest.raises(litellm.BadRequestError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, litellm.BadRequestError)):
             await _model_with(client, compactor=compactor).ainvoke(
                 [Message(role="user", content="now")], Message(role="assistant")
             )
@@ -1138,7 +1142,7 @@ class TestStreamDropRetry:
     async def test_a_second_drop_is_raised(self) -> None:
         client = _FakeClient(self._dropped_stream(pre_first_chunk=True), self._dropped_stream(pre_first_chunk=True))
 
-        with pytest.raises(MidStreamFallbackError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, MidStreamFallbackError)):
             async for _ in _model_with(client).ainvoke_stream(
                 [Message(role="user", content="hi")], Message(role="assistant")
             ):
@@ -1155,7 +1159,7 @@ class TestStreamDropRetry:
             async for chunk in stream:
                 received.append(chunk.content or "")  # ruff: ignore[manual-list-comprehension]  # a comprehension drops what arrived before the raise
 
-        with pytest.raises(MidStreamFallbackError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, MidStreamFallbackError)):
             await consume()
         assert received == ["Partial"]
         assert len(client.requests) == 1
@@ -1165,7 +1169,7 @@ class TestStreamDropRetry:
         """LiteLLM may have generated content it never yielded: its own flag decides, not ours alone."""
         client = _FakeClient(self._dropped_stream(pre_first_chunk=False), _chunks("Unexpected"))
 
-        with pytest.raises(MidStreamFallbackError):
+        with pytest.raises(ModelCallError, check=lambda e: isinstance(e.__cause__, MidStreamFallbackError)):
             async for _ in _model_with(client).ainvoke_stream(
                 [Message(role="user", content="hi")], Message(role="assistant")
             ):

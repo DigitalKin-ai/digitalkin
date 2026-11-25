@@ -8,6 +8,7 @@ resolves to controllable enum members and namespace objects.
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
 from enum import Enum
@@ -27,6 +28,7 @@ from digitalkin.models.events import (
     ReasoningStepEvent,
     RunCompletedEvent,
     RunContentEvent,
+    RunErrorCode,
     RunErrorEvent,
     RunStartedEvent,
     SourceCitationEvent,
@@ -938,21 +940,96 @@ def test_run_completed_without_run_id_still_emits() -> None:
     assert any(isinstance(e, RunCompletedEvent) for e in result)
 
 
-def test_run_error_emits_error_event() -> None:
+def test_unmapped_error_type_becomes_unknown_and_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
-    result = adapter.to_digitalkin_events(
-        _make_event(_FakeRunEvent.run_error, error_type="ValueError", content="boom"),
-    )
+    with caplog.at_level(logging.WARNING):
+        result = adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_error, error_type="ValueError", content="boom"),
+        )
     assert len(result) == 1
     event = result[0]
     assert isinstance(event, RunErrorEvent)
-    assert event.error_type == "ValueError"
+    assert event.error_type == RunErrorCode.UNKNOWN
     assert event.content == "boom"
+    assert "[VALIDATE RUN-ERROR-CODE-UNMAPPED] ValueError: boom" in caplog.text
 
 
-def test_run_error_without_content() -> None:
+def test_known_code_passes_through() -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    result = AgnoStreamAdapter().to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_error, error_type="MODEL_RATE_LIMITED", content="429"),
+    )
+    assert result[0].error_type == RunErrorCode.MODEL_RATE_LIMITED
+
+
+@pytest.mark.parametrize(
+    ("agno_type", "expected"),
+    [
+        ("input_check_error", RunErrorCode.INPUT_REJECTED),
+        ("output_check_error", RunErrorCode.OUTPUT_REJECTED),
+        ("run_cancelled_error", RunErrorCode.RUN_CANCELLED),
+        ("model_authentication_error", RunErrorCode.MODEL_AUTHENTICATION_FAILED),
+        ("model_provider_error", RunErrorCode.UNKNOWN),
+    ],
+)
+def test_agno_slugs_are_mapped(agno_type: str, expected: RunErrorCode) -> None:
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    result = AgnoStreamAdapter().to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_error, error_type=agno_type, content="x"),
+    )
+    assert result[0].error_type == expected
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("prompt is too long: 250000 tokens > 200000 maximum", RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED),
+        (
+            "The input token count (1050000) exceeds the maximum number of tokens allowed",
+            RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED,
+        ),
+        ("Overloaded", RunErrorCode.MODEL_OVERLOADED),
+        (
+            "Error code: 429 - rate_limit_error: Number of request tokens has exceeded your rate limit",
+            RunErrorCode.MODEL_RATE_LIMITED,
+        ),
+        ("429 RESOURCE_EXHAUSTED", RunErrorCode.MODEL_RATE_LIMITED),
+        ("Request timed out.", RunErrorCode.MODEL_TIMEOUT),
+        ("503 Service Unavailable", RunErrorCode.MODEL_UNAVAILABLE),
+        ("Connection error.", RunErrorCode.MODEL_UNAVAILABLE),
+        (
+            "Error code: 400 - invalid_request_error: messages: text content blocks must be non-empty",
+            RunErrorCode.MODEL_REQUEST_INVALID,
+        ),
+        (
+            "Error code: 400 - invalid_request_error: prompt is too long: 250000 tokens",
+            RunErrorCode.MODEL_CONTEXT_LENGTH_EXCEEDED,
+        ),
+        ("Error code: 404 - not_found_error: model: claude-x", RunErrorCode.MODEL_NOT_FOUND),
+        ("Error code: 403 - permission_error: Forbidden", RunErrorCode.MODEL_PERMISSION_DENIED),
+        ("The model refused to continue", RunErrorCode.UNKNOWN),
+    ],
+)
+def test_agno_provider_error_is_refined_from_its_text(
+    content: str, expected: RunErrorCode, caplog: pytest.LogCaptureFixture
+) -> None:
+    """agno's ``RUN_ERROR`` carries no status code, so the provider's text is the only signal left."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    with caplog.at_level(logging.WARNING):
+        result = AgnoStreamAdapter().to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_error, error_type="model_provider_error", content=content),
+        )
+
+    assert result[0].error_type == expected
+    assert f"[VALIDATE RUN-ERROR-CODE-AGNO-PROVIDER] {expected.value}: {content}" in caplog.text
+
+
+def test_missing_error_type_is_unknown() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -961,6 +1038,7 @@ def test_run_error_without_content() -> None:
     )
     event = result[0]
     assert isinstance(event, RunErrorEvent)
+    assert event.error_type == RunErrorCode.UNKNOWN
     assert event.content is None
 
 

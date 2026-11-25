@@ -31,20 +31,6 @@
   "promptCacheTtl": "1h",
   "subagentPromptCacheTtl": "1h",
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.sh", "timeout": 10 }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-edit.sh", "timeout": 10 }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",

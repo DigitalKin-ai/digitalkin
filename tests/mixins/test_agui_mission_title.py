@@ -21,6 +21,7 @@ from digitalkin.models.events import (
     MissionTitle,
     MissionTitleEvent,
     RunCompletedEvent,
+    RunErrorCode,
     RunStartedEvent,
 )
 from digitalkin.models.services.services import ServicesMode
@@ -249,7 +250,7 @@ class TestMissionTitleTask:
         await _start(mixin, ctx)
         await mixin.entered.wait()
 
-        await ctx.agui_run.fail(ctx, "failed", "boom", "module_error")
+        await ctx.agui_run.fail(ctx, "boom", RunErrorCode.MODULE_FAILED)
 
         with pytest.raises(asyncio.CancelledError):
             await ctx.agui_run.title_task

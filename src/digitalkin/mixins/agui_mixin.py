@@ -17,8 +17,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from ag_ui.core import PROTOCOL_VERSION, SubagentFinishedSuspendedOutcome
-from ag_ui.core.events import ActivitySnapshotEvent, StateDeltaEvent, StateSnapshotEvent
+from ag_ui.core import PROTOCOL_VERSION, RunFinishedCancelledOutcome, SubagentFinishedSuspendedOutcome
+from ag_ui.core.events import ActivitySnapshotEvent, StateDeltaEvent, StateSnapshotEvent, TokenUsage
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from ag_ui.core.events import ReasoningEndEvent as AgUiReasoningEndEvent
 from ag_ui.core.events import ReasoningMessageContentEvent as AgUiReasoningMessageContentEvent
@@ -38,6 +38,7 @@ from ag_ui.core.events import ToolCallArgsEvent as AgUiToolCallArgsEvent
 from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent
 from ag_ui.core.events import ToolCallResultEvent as AgUiToolCallResultEvent
 from ag_ui.core.events import ToolCallStartEvent as AgUiToolCallStartEvent
+from ag_ui.core.token_usage import aggregate_token_usage
 from pydantic import BaseModel, ValidationError
 
 from digitalkin.logger import logger
@@ -53,6 +54,7 @@ from digitalkin.models.events import (
     ReasoningStepEvent,
     RunCompletedEvent,
     RunContentEvent,
+    RunErrorCode,
     RunErrorEvent,
     RunStartedEvent,
     SourceCitation,
@@ -110,11 +112,31 @@ class AgUiRunState:
 
     It is also the single writer of the run's ``sources`` activity messages: one per owner
     (the agent, or each subagent), so a subagent's list never replaces its parent's.
+
+    A run started for a task collects the token usage the LiteLLM cost callback reports for that
+    task (:meth:`record_usage`) and sends it on its terminal event.
     """
 
-    def __init__(self) -> None:
-        """Start a running run with an empty pipeline."""
+    _open: ClassVar[dict[str, AgUiRunState]] = {}
+    _closed_at: ClassVar[dict[str, float]] = {}
+
+    def __init__(self, thread_id: str = "", run_id: str = "", task_id: str | None = None) -> None:
+        """Start a running run with an empty pipeline.
+
+        Args:
+            thread_id: AG-UI thread of the run, echoed on the ``RUN_FINISHED`` a cancel sends.
+            run_id: AG-UI run id, echoed likewise.
+            task_id: Task whose LLM calls count toward this run's usage; None counts none.
+        """
         self.open = True
+        self.thread_id = thread_id
+        self.run_id = run_id
+        self.task_id = task_id
+        # Text and reasoning messages started and not yet ended: id -> (kind, subagent_run_id).
+        self.messages: dict[str, tuple[str, str | None]] = {}
+        self.usage: list[TokenUsage] = []
+        if task_id is not None:
+            AgUiRunState._open[task_id] = self
         self.sources_id = str(uuid.uuid4())
         self.sources: dict[str | None, dict[str, dict[str, str]]] = {}
         self.title_task: asyncio.Task[None] | None = None
@@ -214,39 +236,212 @@ class AgUiRunState:
         except Exception:
             logger.exception("Mission title failed", extra=context.session.current_ids())
 
+    @classmethod
+    def record_usage(cls, task_id: str, usage: TokenUsage, started_at: float) -> None:
+        """Count one LLM call toward the open run of the task that made it.
+
+        A call made after the run closed (a session summary, say) belongs to no run. One that
+        started while the run was open but was reported after it closed is missing from its usage
+        and is logged.
+
+        Args:
+            task_id: Task the call was made in.
+            usage: The call's token counts.
+            started_at: When the call started, epoch seconds.
+        """
+        run = cls._open.get(task_id)
+        if run is not None:
+            run.usage.append(usage)
+            return
+        closed_at = cls._closed_at.get(task_id)
+        if closed_at is not None and started_at < closed_at:
+            # TODO(validate): AGUI-USAGE-LATE litellm's success callback lands before the terminal event;
+            # a call it reports after the run closed is missing from that run's usage
+            logger.info(
+                "[VALIDATE AGUI-USAGE-LATE] usage of %s (%s tokens) reported %.3f s after its run closed",
+                usage.model,
+                usage.total_tokens,
+                time.time() - closed_at,
+                extra={"task_id": task_id},
+            )
+
+    def close(self) -> list[TokenUsage] | None:
+        """Mark the run closed and stop counting usage toward it.
+
+        Returns:
+            The run's usage, one entry per provider and model, or None when no call reported any.
+        """
+        self.open = False
+        if self.task_id is not None and AgUiRunState._open.get(self.task_id) is self:
+            del AgUiRunState._open[self.task_id]
+            closed = AgUiRunState._closed_at
+            closed[self.task_id] = time.time()
+            while len(closed) > 1024:  # ruff: ignore[magic-value-comparison] — bound of the late-usage memory
+                del closed[next(iter(closed))]
+        return aggregate_token_usage(self.usage) or None
+
+    @staticmethod
+    def error_fields(code: RunErrorCode, fields: dict[str, Any]) -> dict[str, Any]:
+        """Add the ``retryable`` hint of ``code`` to a ``RUN_ERROR``'s ``metadata``.
+
+        ``RUN_ERROR`` is a closed object in AG-UI 1.0, so the hint rides in ``metadata``, beside
+        the ``digitalkin`` key and the model labels.
+
+        Args:
+            code: The error code; no hint is added when the SDK cannot tell.
+            fields: Event fields, updated in place.
+
+        Returns:
+            ``fields``.
+        """
+        if code.retryable is not None:
+            fields["metadata"] = {**(fields.get("metadata") or {}), "retryable": code.retryable}
+        return fields
+
     async def fail(
         self,
         context: ModuleContext,
-        status: str,
         message: str,
-        code: str | None,
+        code: RunErrorCode,
         **fields: Any,
     ) -> None:
-        """Close the run once: record ``status``/``message`` in state, then emit ``RUN_ERROR``.
+        """Close the run once: record it failed with ``message`` in state, then emit ``RUN_ERROR``.
+
+        Nothing still open is closed: per AG-UI 1.0, ``RUN_ERROR`` abandons it.
 
         Args:
             context: Module context whose callbacks carry the events.
-            status: Terminal run status, ``failed`` or ``cancelled``.
             message: Human-readable error.
-            code: ``RUN_ERROR`` code.
+            code: ``RUN_ERROR`` code; its ``retryable`` hint is sent unless the SDK cannot tell.
             **fields: Extra AG-UI event fields (metadata).
         """
         if not self.open:
             logger.info(
-                "AG-UI run already closed (%s); dropping %s RUN_ERROR code=%s message=%s",
+                "AG-UI run already closed (%s); dropping RUN_ERROR code=%s message=%s",
                 self.state["run"]["status"],
-                status,
-                code,
+                code.value,
                 message,
                 extra=context.session.current_ids(),
             )
             return
         if self.title_task is not None:
             self.title_task.cancel()
-        self.open = False
-        await self.update(context, (("run", "status"), status), (("run", "error"), message))
+        usage = self.close()
+        await self.update(context, (("run", "status"), "failed"), (("run", "error"), message))
         await context.callbacks.send_message(
-            AgUiOutput(root=AgUiRunErrorOutput(event=AgUiRunErrorEvent(message=message, code=code, **fields)))
+            AgUiOutput(
+                root=AgUiRunErrorOutput(
+                    event=AgUiRunErrorEvent(message=message, code=code, usage=usage, **self.error_fields(code, fields))
+                )
+            )
+        )
+
+    async def cancel(self, context: ModuleContext, reason: str) -> None:
+        """Close the run once as stopped by the user: ``RUN_FINISHED`` with the ``cancelled`` outcome.
+
+        ``RUN_FINISHED`` requires everything the run opened to be closed first: open text and
+        reasoning messages end, running tool calls end with an error result, running subagents
+        end with ``SUBAGENT_ERROR`` ``RUN_CANCELLED``.
+
+        Args:
+            context: Module context whose callbacks carry the events.
+            reason: Cancellation reason, logged.
+        """
+        if not self.open:
+            logger.info(
+                "AG-UI run already closed (%s); dropping the cancel (%s)",
+                self.state["run"]["status"],
+                reason,
+                extra=context.session.current_ids(),
+            )
+            return
+        if self.title_task is not None:
+            self.title_task.cancel()
+        send = context.callbacks.send_message
+        for message_id, (kind, owner) in self.messages.items():
+            if kind == "reasoning":
+                await send(
+                    AgUiOutput(
+                        root=AgUiReasoningMessageEndOutput(
+                            event=AgUiReasoningMessageEndEvent(message_id=message_id, subagent_run_id=owner)
+                        )
+                    )
+                )
+                await send(
+                    AgUiOutput(
+                        root=AgUiReasoningEndOutput(
+                            event=AgUiReasoningEndEvent(message_id=message_id, subagent_run_id=owner)
+                        )
+                    )
+                )
+            else:
+                await send(
+                    AgUiOutput(
+                        root=AgUiTextMessageEndOutput(
+                            event=AgUiTextMessageEndEvent(message_id=message_id, subagent_run_id=owner)
+                        )
+                    )
+                )
+        self.messages.clear()
+        changes: list[tuple[tuple[str, ...], Any]] = []
+        for tool_call_id, tool in self.state["tools"].items():
+            if tool["status"] != "running":
+                continue
+            owner = tool.get("subagentRunId")
+            await send(
+                AgUiOutput(
+                    root=AgUiToolCallEndOutput(
+                        event=AgUiToolCallEndEvent(tool_call_id=tool_call_id, subagent_run_id=owner)
+                    )
+                )
+            )
+            await send(
+                AgUiOutput(
+                    root=AgUiToolCallResultOutput(
+                        event=AgUiToolCallResultEvent(
+                            message_id=str(uuid.uuid4()),
+                            tool_call_id=tool_call_id,
+                            content=json.dumps({"error": "run cancelled"}),
+                            role="tool",
+                            subagent_run_id=owner,
+                        )
+                    )
+                )
+            )
+            changes += [
+                (("tools", tool_call_id, "status"), "failed"),
+                (("tools", tool_call_id, "error"), "run cancelled"),
+            ]
+        for subagent_run_id, subagent in reversed(self.state["subagents"].items()):
+            if subagent["status"] != "running":
+                continue
+            await send(
+                AgUiOutput(
+                    root=AgUiSubagentErrorOutput(
+                        event=AgUiSubagentErrorEvent(
+                            subagent_run_id=subagent_run_id, message="run cancelled", code=RunErrorCode.RUN_CANCELLED
+                        )
+                    )
+                )
+            )
+            changes += [
+                (("subagents", subagent_run_id, "status"), "failed"),
+                (("subagents", subagent_run_id, "error"), "run cancelled"),
+            ]
+        usage = self.close()
+        logger.info("AG-UI run cancelled (%s)", reason, extra=context.session.current_ids())
+        await self.update(context, *changes, (("run", "status"), "cancelled"))
+        await send(
+            AgUiOutput(
+                root=AgUiRunFinishedOutput(
+                    event=AgUiRunFinishedEvent(
+                        thread_id=self.thread_id,
+                        run_id=self.run_id,
+                        outcome=RunFinishedCancelledOutcome(),
+                        usage=usage,
+                    )
+                )
+            )
         )
 
     async def cite(self, context: ModuleContext, citation: SourceCitation, owner: str | None) -> None:
@@ -514,9 +709,12 @@ class AgUiMixin:
             )
         )
         await self._send_agui(context, output)
-        if context.agui_run is not None and context.agui_run.title_task is not None:
-            context.agui_run.title_task.cancel()
-        context.agui_run = AgUiRunState()
+        previous = context.agui_run
+        if previous is not None and previous.title_task is not None:
+            previous.title_task.cancel()
+        if previous is not None and previous.open:
+            previous.close()
+        context.agui_run = AgUiRunState(self._thread_id, self._run_id, context.session.job_id)
         await context.agui_run.snapshot(context)
         if type(self).mission_title is not AgUiMixin.mission_title:
             context.agui_run.title_task = asyncio.create_task(context.agui_run.title(context, self.mission_title))
@@ -542,6 +740,8 @@ class AgUiMixin:
             )
         )
         await self._send_agui(context, output)
+        if context.agui_run is not None:
+            context.agui_run.messages[event.message_id] = ("text", event.subagent_run_id)
 
     async def _handle_run_content(
         self,
@@ -579,6 +779,8 @@ class AgUiMixin:
             event=AgUiTextMessageEndEvent(message_id=event.message_id, **self._authored(event)),
         )
         await self._send_agui(context, output)
+        if context.agui_run is not None:
+            context.agui_run.messages.pop(event.message_id, None)
 
     async def _handle_run_completed(
         self,
@@ -597,15 +799,17 @@ class AgUiMixin:
             extra=context.session.current_ids(),
         )
         run = context.agui_run
+        usage = None
         if run is not None and run.open:
             if run.title_task is not None:
                 await run.title_task
-            run.open = False
+            usage = run.close()
             await run.update(context, (("run", "status"), "completed"))
         output = AgUiRunFinishedOutput(
             event=AgUiRunFinishedEvent(
                 thread_id=self._thread_id,
                 run_id=run_id,
+                usage=usage,
                 **self._authored(event),
             )
         )
@@ -616,18 +820,32 @@ class AgUiMixin:
         context: ModuleContext,
         event: RunErrorEvent,
     ) -> None:
-        """Handle run error event - mark the run failed and emit AG-UI RunError."""
+        """Handle run error event - mark the run failed and emit AG-UI RunError.
+
+        An agent run cancelled from inside (agno's ``run_cancelled_error``) did not fail: it ends
+        as ``RUN_FINISHED`` cancelled, like a user stop.
+        """
         error_msg = event.content or "Agent run failed"
-        if context.agui_run is not None:
-            await context.agui_run.fail(context, "failed", error_msg, event.error_type, **self._authored(event))
+        code = RunErrorCode(event.error_type)
+        run = context.agui_run
+        if run is not None and code == RunErrorCode.RUN_CANCELLED:
+            await run.cancel(context, error_msg)
             return
-        output = AgUiRunErrorOutput(
-            event=AgUiRunErrorEvent(
-                message=error_msg,
-                code=event.error_type,
-                **self._authored(event),
+        if run is not None:
+            await run.fail(context, error_msg, code, **self._authored(event))
+            return
+        if code == RunErrorCode.RUN_CANCELLED:
+            finished = AgUiRunFinishedOutput(
+                event=AgUiRunFinishedEvent(
+                    thread_id=self._thread_id or str(uuid.uuid4()),
+                    run_id=self._run_id or str(uuid.uuid4()),
+                    outcome=RunFinishedCancelledOutcome(),
+                )
             )
-        )
+            await self._send_agui(context, finished)
+            return
+        fields = AgUiRunState.error_fields(code, self._authored(event))
+        output = AgUiRunErrorOutput(event=AgUiRunErrorEvent(message=error_msg, code=code, **fields))
         await self._send_agui(context, output)
 
     async def _handle_subagent_started(
@@ -873,6 +1091,8 @@ class AgUiMixin:
             )
         )
         await self._send_agui(context, message_start_output)
+        if context.agui_run is not None:
+            context.agui_run.messages[reasoning_id] = ("reasoning", event.subagent_run_id)
 
     async def _handle_reasoning_delta(
         self,
@@ -934,6 +1154,8 @@ class AgUiMixin:
             event=AgUiReasoningEndEvent(message_id=reasoning_id, **self._authored(event)),
         )
         await self._send_agui(context, end_output)
+        if context.agui_run is not None:
+            context.agui_run.messages.pop(reasoning_id, None)
 
     async def _handle_custom(
         self,

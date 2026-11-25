@@ -65,6 +65,7 @@ class TaskSession:
         # by preload_instance setting context.task_manager before _create_session runs.
         self.signal_service = module.context.task_manager
         self.module = module
+        module.task_session = self
 
         self._status = "pending"
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
@@ -142,6 +143,24 @@ class TaskSession:
         """
         self._last_exception = str(exc)
         self._last_traceback = traceback.format_exc()
+
+    def cancel_cause(self) -> CancellationReason:
+        """Why the task is being cancelled, readable while its coroutine still unwinds.
+
+        ``cancellation_reason`` is only final once the task has ended, after the module stopped;
+        this reads the same inputs in the same order: a ``stop`` signal, a reason the manager set
+        (timeout, shutdown), then a ``cancel`` signal.
+
+        Returns:
+            The cause, ``UNKNOWN`` when nothing recorded one.
+        """
+        if self.pending_signal_action == "stop":
+            return CancellationReason.SIGNAL_SERVICE_STOP
+        if self.cancellation_reason not in {CancellationReason.UNKNOWN, CancellationReason.COMPLETED}:
+            return self.cancellation_reason
+        if self.pending_signal_action == "cancel":
+            return CancellationReason.SIGNAL_SERVICE_CANCEL
+        return CancellationReason.UNKNOWN
 
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
         """Mark the task cancelled with ``reason``. Idempotent.
