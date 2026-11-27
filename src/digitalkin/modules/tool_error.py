@@ -35,7 +35,7 @@ class ToolError(Exception):
         text = re.sub(r"(https?://[^\s?#'\"<>]+)\?[^\s#'\"<>]+", r"\1?<redacted>", text)
         return re.sub(
             r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password|authorization)(['\"]?\s*[:=]\s*['\"]?)"
-            r"(?:bearer\s+)?[^\s'\",&}]+",
+            r"(?:(?:bearer|basic|token|digest|negotiate)\s+)?[^\s'\",&}]+",
             r"\1\2<redacted>",
             text,
         )

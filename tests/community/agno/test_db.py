@@ -585,17 +585,16 @@ class TestKeptRequest:
 
         await StorageDb(storage=storage).keep_request(self._skeleton(), self._request())
 
-    @pytest.mark.parametrize("status", ["COMPLETED", "PAUSED"])
-    async def test_a_run_that_ended_normally_releases_its_request(self, status: str) -> None:
-        run = {"run_id": "r1", "agent_id": "a1", "session_id": "s1", "status": status}
+    async def test_a_completed_run_releases_its_request(self) -> None:
+        run = {"run_id": "r1", "agent_id": "a1", "session_id": "s1", "status": "COMPLETED"}
         storage = _write_storage(_session("s1", None, [self._request(), run]))
 
         await StorageDb(storage=storage).release_request("s1", "r1")
 
         assert [r["run_id"] for r in storage.upsert.await_args.args[2]["runs"]] == ["r1"]
 
-    @pytest.mark.parametrize("status", ["ERROR", "CANCELLED", None])
-    async def test_a_failed_or_missing_run_keeps_its_request(self, status: str | None) -> None:
+    @pytest.mark.parametrize("status", ["ERROR", "CANCELLED", "PAUSED", None])
+    async def test_a_failed_paused_or_missing_run_keeps_its_request(self, status: str | None) -> None:
         runs = [self._request()]
         if status is not None:
             runs.append({"run_id": "r1", "agent_id": "a1", "session_id": "s1", "status": status})

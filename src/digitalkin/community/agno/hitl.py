@@ -648,6 +648,9 @@ class AgnoHitlRunner:
         if pause_info is None:
             await self._store.delete(thread_id)
             logger.info("continue_paused_run: thread_id=%s completed, record cleared", thread_id)
+            db, session_id = self._agent.db, self._agent.session_id
+            if isinstance(db, StorageDb) and session_id is not None:
+                await db.release_request(session_id, record.run_id)
         return pause_info
 
     async def try_resume(
