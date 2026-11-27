@@ -20,6 +20,9 @@ class TestRedact:
             ("{'Authorization': 'Bearer K4'}", "{'Authorization': '<redacted>'}"),
             ('{"access_token": "K5", "n": 1}', '{"access_token": "<redacted>", "n": 1}'),
             ("password: K6", "password: <redacted>"),
+            ("401 for headers {Authorization: Basic dXNlcjpwYXNz}", "401 for headers {Authorization: <redacted>}"),
+            ("{'Authorization': 'Token K7'}", "{'Authorization': '<redacted>'}"),
+            ("authorization=negotiate K8 rejected", "authorization=<redacted> rejected"),
             ("timeout after 30 s on https://api.x/v1/items", "timeout after 30 s on https://api.x/v1/items"),
         ],
     )

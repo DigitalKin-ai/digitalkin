@@ -960,6 +960,40 @@ class SafeLiteLLM(LiteLLM):
         """
         return self.empty_response_notice is not None and response_format is None
 
+    @staticmethod
+    def _portable_schema(node: Any, tool: str | None) -> Any:
+        """Rewrite a tool's JSON schema into the subset every provider accepts.
+
+        ``oneOf`` becomes ``anyOf`` (Kimi on Bedrock rejects ``oneOf``) and the OpenAPI ``discriminator``
+        is dropped. For a discriminated union both accept the same arguments; agno still validates the
+        call against the tool's own model. Property and definition names, and data values such as
+        ``default`` or ``enum``, are kept as written.
+
+        Args:
+            node: Schema node.
+            tool: Tool name, for the log of dropped keys.
+
+        Returns:
+            The rewritten copy.
+        """
+        if isinstance(node, list):
+            return [SafeLiteLLM._portable_schema(item, tool) for item in node]
+        if not isinstance(node, dict):
+            return node
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "discriminator":
+                logger.debug("[VALIDATE TOOL-SCHEMA-PORTABLE] Tool %s: dropped discriminator=%r", tool, value)
+            elif key in {"properties", "patternProperties", "$defs", "definitions"} and isinstance(value, dict):
+                out[key] = {name: SafeLiteLLM._portable_schema(sub, tool) for name, sub in value.items()}
+            elif key in {"default", "const", "enum", "examples"}:
+                out[key] = value
+            else:
+                out["anyOf" if key == "oneOf" and "anyOf" not in node else key] = SafeLiteLLM._portable_schema(
+                    value, tool
+                )
+        return out
+
     def get_request_params(
         self,
         tools: list[dict[str, Any]] | None = None,
@@ -972,9 +1006,32 @@ class SafeLiteLLM(LiteLLM):
             response_format: Structured-output schema, forwarded to agno.
 
         Returns:
-            agno's kwargs without ``temperature`` when disabled, and with a cache marker on the last
-            tool definition when caching is enabled.
+            agno's kwargs without ``temperature`` when disabled, tool definitions every provider
+            accepts, and a cache marker on the last tool definition when caching is enabled.
         """
+        if tools:
+            portable: list[dict[str, Any]] = []
+            for tool in tools:
+                function = tool.get("function")
+                if tool.get("type") != "function" or not isinstance(function, dict):
+                    portable.append(tool)
+                    continue
+                # TODO(validate): TOOL-SCHEMA-PORTABLE Mistral and Kimi kins answer themselves, not via a fallback
+                kept: dict[str, Any] = {}
+                for key, value in function.items():
+                    if key == "parameters":
+                        kept[key] = self._portable_schema(value, function.get("name"))
+                    elif key in {"name", "description", "strict"}:
+                        kept[key] = value
+                    else:
+                        logger.debug(
+                            "[VALIDATE TOOL-SCHEMA-PORTABLE] Tool %s: dropped %s=%r from the model request",
+                            function.get("name"),
+                            key,
+                            value,
+                        )
+                portable.append({**tool, "function": kept})
+            tools = portable
         params = super().get_request_params(tools=tools, response_format=response_format)
         if not self.send_temperature:
             params.pop("temperature", None)

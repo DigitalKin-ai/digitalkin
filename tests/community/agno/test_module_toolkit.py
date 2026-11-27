@@ -114,6 +114,42 @@ class TestWrapperKeepsLastFrames:
         assert body["output"] == {"root": {"protocol": "search", "results": [2]}}
         assert "input_kwargs" not in body["metadata"]
 
+    def test_custom_event_after_the_output_is_not_the_result(self):
+        """A tool that announces its result to the front after sending it keeps its output."""
+        output = {"root": {"protocol": "search", "results": [1]}}
+        frames = [output, _custom_event_message("custom_app_updated"), {"root": {"protocol": "stream.end"}}]
+        body = json.loads(asyncio.run(_wrapper(frames)()))
+        assert body["output"] == output
+
+    def test_custom_event_before_the_output_is_not_the_result(self):
+        output = {"root": {"protocol": "search", "results": [1]}}
+        body = json.loads(asyncio.run(_wrapper([_custom_event_message(), output])()))
+        assert body["output"] == output
+
+    def test_sources_snapshot_after_the_output_is_not_the_result(self):
+        """Citations usually follow the results: the snapshot is relayed, the results stay the output."""
+        output = {"root": {"protocol": "search", "results": [1]}}
+        snapshot = {
+            "root": {
+                "protocol": "agui_activity_snapshot",
+                "event": {"type": "ACTIVITY_SNAPSHOT", "activityType": "sources", "content": {"sources": []}},
+            }
+        }
+        body = json.loads(asyncio.run(_wrapper([output, snapshot, {"root": {"protocol": "stream.end"}}])()))
+        assert body["output"] == output
+
+    def test_error_after_a_custom_event_fails_the_call(self):
+        """A relayed event is not a result: the agent reads the tool's error, not a success."""
+        frames = [_custom_event_message(), {"root": {"protocol": "stream.error", "code": "X", "message": "boom"}}]
+        body = _failure(frames)
+        assert body["error"] == "[X] boom"
+
+    def test_custom_event_alone_is_the_result(self):
+        """A tool that only streams a custom event still succeeds, as before."""
+        event = _custom_event_message()
+        body = json.loads(asyncio.run(_wrapper([event, {"root": {"protocol": "stream.end"}}])()))
+        assert body["output"] == event
+
     def test_body_is_compact_json(self):
         result = asyncio.run(_wrapper([{"root": {"protocol": "search", "results": [1]}}])())
         assert "\n" not in result

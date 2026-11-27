@@ -467,14 +467,15 @@ class StorageDb(AsyncBaseDb):
         except Exception:
             logger.exception("Session %s: keeping the request %s failed", session_id, run.get("run_id"))
             return
-        # TODO(validate): KEPT-REQUEST a run cut by a timeout, cancel or crash leaves its request in the history
+        # TODO(validate): KEPT-REQUEST a run cut (timeout, cancel, crash) or left paused keeps its request
         logger.info("[VALIDATE KEPT-REQUEST] Session %s: request %s kept", session_id, run.get("run_id"))
 
     async def release_request(self, session_id: str, run_id: str) -> None:
-        """Drop the request run of ``run_id`` once the run itself is stored as completed or paused.
+        """Drop the request run of ``run_id`` once the run itself is stored as completed.
 
-        Its own messages then hold the request; an errored, cancelled or unsaved run keeps it. A
-        failure is logged and never fails the run.
+        Its own messages then hold the request. An errored, cancelled, paused or unsaved run keeps it:
+        Agno leaves a paused run out of the history, and a pause may never be continued. A failure is
+        logged and never fails the run.
 
         Args:
             session_id: The session holding both runs.
@@ -485,8 +486,8 @@ class StorageDb(AsyncBaseDb):
                 stored = await self.storage.read(self.sessions_collection, session_id)
                 runs = (stored.data.model_dump().get("runs") or []) if stored is not None else []
                 status = next((run.get("status") for run in runs if run.get("run_id") == run_id), None)
-                if status not in {RunStatus.completed.value, RunStatus.paused.value}:
-                    logger.warning(
+                if status != RunStatus.completed.value:
+                    (logger.info if status == RunStatus.paused.value else logger.warning)(
                         "Session %s: run %s ended %s, its request stays in the history", session_id, run_id, status
                     )
                     return
