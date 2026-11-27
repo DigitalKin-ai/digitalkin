@@ -11,7 +11,9 @@ import base64
 import binascii
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any, ClassVar
+from uuid import uuid4
 
 from ag_ui.core.events import Interrupt, RunFinishedInterruptOutcome
 from ag_ui.core.types import (
@@ -31,20 +33,23 @@ from ag_ui.core.types import (
 from ag_ui.core.types import (
     ToolCall as AgUiToolCall,
 )
+from agno.db.base import SessionType
 from agno.media import Image
 from agno.run.agent import RunCompletedEvent as AgentRunCompleted
 from agno.run.agent import RunOutput
+from agno.run.base import RunStatus
 from agno.run.team import RunCompletedEvent as TeamRunCompleted
 from agno.run.team import TeamRunOutput
 from agno.team import Team
 from agno.utils.team import get_member_id
 from pydantic import BaseModel, ConfigDict, Field
 
+from digitalkin.community.agno.db import StorageDb
 from digitalkin.community.agno.models import AgUiRunInput, PauseInfo
 from digitalkin.models.settings.agui import get_agui_settings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import AsyncIterator, Callable, Coroutine
 
     from ag_ui.core.types import Message as AgUiMessage
     from ag_ui.core.types import Tool as AgUiTool
@@ -498,21 +503,74 @@ class AgnoHitlRunner:
         """
         logger.info("AgnoHitlRunner.run: starting (thread_id=%s, msg_len=%d)", thread_id, len(message))
 
+        run_id = str(uuid4())
         stream = self._agent.arun(
             message,
             images=images,
             stream=True,
             stream_events=True,
             yield_run_output=True,
+            run_id=run_id,
             dependencies={self._dependency_key: agui_tools or []},
         )
-        return await self._drive(
+        db, session_id = self._agent.db, self._agent.session_id
+        keeping = isinstance(db, StorageDb) and session_id is not None
+        if keeping:
+            stream = self._keeping_request(stream, run_id, message)
+        pause_info = await self._drive(
             stream=stream,
             send=send,
             thread_id=thread_id,
             run_output_cls=self._run_output_cls,
             agui_tools=agui_tools,
         )
+        if keeping:
+            await db.release_request(session_id, run_id)  # type: ignore[union-attr]
+        return pause_info
+
+    async def _keeping_request(self, stream: Any, run_id: str, message: str) -> AsyncIterator[Any]:
+        """Forward a fresh run's events, storing the user's request as soon as the run has started.
+
+        Stored on the first event, once Agno has loaded the session for this run, so the run's own
+        history never holds it twice. A run cut by a timeout, a cancel or a crash, or saved as an error
+        (left out of the history by Agno), leaves the request for the next run of the mission;
+        :meth:`StorageDb.release_request` drops it after a run that ended normally.
+
+        Args:
+            stream: The Agno event stream of the run.
+            run_id: The run's id; the request is stored as ``<run_id>:request``.
+            message: The user's request.
+
+        Yields:
+            The stream's events, unchanged.
+        """
+        owner = "team_id" if isinstance(self._agent, Team) else "agent_id"
+        kept = False
+        async for event in stream:
+            if not kept:
+                kept = True
+                now = int(time.time())
+                await self._agent.db.keep_request(  # type: ignore[union-attr]
+                    {
+                        "session_id": self._agent.session_id,
+                        "session_type": (SessionType.TEAM if owner == "team_id" else SessionType.AGENT).value,
+                        owner: self._agent.id,
+                        "user_id": self._agent.user_id,
+                        "created_at": now,
+                        "updated_at": now,
+                        "runs": [],
+                    },
+                    {
+                        "run_id": f"{run_id}:request",
+                        owner: self._agent.id,
+                        "session_id": self._agent.session_id,
+                        "user_id": self._agent.user_id,
+                        "status": RunStatus.completed.value,
+                        "created_at": now,
+                        "messages": [{"id": str(uuid4()), "role": "user", "content": message, "created_at": now}],
+                    },
+                )
+            yield event
 
     async def continue_paused_run(
         self,
@@ -590,6 +648,9 @@ class AgnoHitlRunner:
         if pause_info is None:
             await self._store.delete(thread_id)
             logger.info("continue_paused_run: thread_id=%s completed, record cleared", thread_id)
+            db, session_id = self._agent.db, self._agent.session_id
+            if isinstance(db, StorageDb) and session_id is not None:
+                await db.release_request(session_id, record.run_id)
         return pause_info
 
     async def try_resume(

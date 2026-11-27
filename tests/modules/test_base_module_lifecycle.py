@@ -19,6 +19,7 @@ from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.utility import HealthcheckPingInput
+from digitalkin.modules import ToolError
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
@@ -377,6 +378,39 @@ class TestRunLifecycle:
         assert isinstance(sent, ModuleCodeModel)
         assert sent.code == RunErrorCode.PERMISSION_DENIED
         assert sent.message == "denied"
+
+    @pytest.mark.unit
+    async def test_tool_error_sends_its_message_and_retry_hint(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A ToolError is answered MODULE_FAILED with its redacted message and retryable, logged without traceback."""
+        module = _instantiate(_make_module_cls())
+        module.context.callbacks.send_message = AsyncMock()
+        error = ToolError("quota hit at https://api.x/v1?api_key=SECRET, retry in 30 s", retryable=True)
+
+        with patch.object(module, "run", new_callable=AsyncMock, side_effect=error):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.FAILED
+        sent = module.context.callbacks.send_message.call_args[0][0]
+        assert isinstance(sent, ModuleCodeModel)
+        assert sent.code == RunErrorCode.MODULE_FAILED
+        assert sent.message == "quota hit at https://api.x/v1?<redacted> retry in 30 s"
+        assert sent.retryable is True
+        assert "SECRET" not in caplog.text
+        assert all(record.exc_info is None for record in caplog.records)
+
+    @pytest.mark.unit
+    async def test_unexpected_error_sends_its_type_and_redacted_text(self) -> None:
+        """Any other exception is answered with ``<Type>: <text>`` redacted and no retry hint."""
+        module = _instantiate(_make_module_cls())
+        module.context.callbacks.send_message = AsyncMock()
+        error = RuntimeError("Client error '401' for url 'https://api.x/search?q=a&api_key=SECRET'")
+
+        with patch.object(module, "run", new_callable=AsyncMock, side_effect=error):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        sent = module.context.callbacks.send_message.call_args[0][0]
+        assert sent.message == "RuntimeError: Client error '401' for url 'https://api.x/search?<redacted>'"
+        assert sent.retryable is None
 
     @pytest.mark.unit
     @pytest.mark.edge_case

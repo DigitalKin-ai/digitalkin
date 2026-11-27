@@ -68,7 +68,7 @@ def _listed_db(sessions: list[dict[str, Any]]) -> StorageDb:
 
 class TestStorageConfig:
     def test_registers_both_collections(self) -> None:
-        assert AGNO_STORAGE_CONFIG == {"agno_sessions": AgnoSession, "agno_compactions": AgnoCompaction}
+        assert {"agno_sessions": AgnoSession, "agno_compactions": AgnoCompaction} == AGNO_STORAGE_CONFIG
 
     def test_merges_with_the_hitl_collections(self) -> None:
         config = {**HITL_STORAGE_CONFIG, **AGNO_STORAGE_CONFIG}
@@ -274,6 +274,39 @@ class TestUpsertSession:
         contents = [run["messages"][0]["content"] for run in storage.upsert.await_args.args[2]["runs"]]
         assert contents[2:] == results[2:], "the five most recent results are kept whole"
         assert contents[:2] == ["x" * 10 + "\n\n[... truncated, original tool result was 50 chars]"] * 2
+
+    @pytest.mark.regression
+    async def test_empty_assistant_messages_are_not_stored(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Five ``{'role': 'assistant', 'content': ''}`` were stored, then dropped from every request (DEV-978)."""
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        storage = _write_storage()
+        call = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "  \n"},
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "c1", "content": ""},
+            {"role": "assistant", "content": "Done."},
+        ]
+        run = {"run_id": "r1", "agent_id": "a1", "session_id": "s1", "messages": messages}
+
+        with caplog.at_level(logging.INFO, logger="digitalkin"):
+            await StorageDb(storage=storage).upsert_session(self._session_object([run]))
+
+        stored = storage.upsert.await_args.args[2]["runs"][0]["messages"]
+        assert [(m["role"], m.get("content")) for m in stored] == [
+            ("user", "hi"),
+            ("assistant", ""),
+            ("tool", ""),
+            ("assistant", "Done."),
+        ]
+        assert stored[1]["tool_calls"], "an assistant turn calling a tool is kept, empty text or not"
+        assert (
+            len({r.getMessage() for r in caplog.records if "Empty assistant message not stored" in r.getMessage()}) == 2
+        )
 
     async def test_a_cut_result_is_not_cut_again(self) -> None:
         storage = _write_storage()
@@ -505,3 +538,81 @@ class TestDefaultStorageRoundTrip:
 
         assert record is not None
         assert (record["summary"], record["token_samples"], record["messages_compacted"]) == ("S", [[10, 20]], 4)
+
+
+class TestKeptRequest:
+    """The user's request survives a run that never saves, or saves as an error (DEV-982)."""
+
+    @staticmethod
+    def _skeleton() -> dict[str, Any]:
+        return {"session_id": "s1", "session_type": "agent", "agent_id": "a1", "runs": []}
+
+    @staticmethod
+    def _request(run_id: str = "r1") -> dict[str, Any]:
+        return {
+            "run_id": f"{run_id}:request",
+            "agent_id": "a1",
+            "session_id": "s1",
+            "status": "COMPLETED",
+            "messages": [{"role": "user", "content": "ORNITHORYNQUE-47: write the poem"}],
+        }
+
+    async def test_a_first_run_creates_the_session_with_the_request(self) -> None:
+        storage = _write_storage()
+
+        await StorageDb(storage=storage).keep_request(self._skeleton(), self._request())
+
+        collection, session_id, data = storage.upsert.await_args.args
+        assert (collection, session_id) == ("agno_sessions", "s1")
+        assert [run["run_id"] for run in data["runs"]] == ["r1:request"]
+        session = AgentSession.from_dict(data)
+        assert session is not None
+        assert "ORNITHORYNQUE-47" in str(session.get_messages())
+
+    async def test_a_later_run_appends_the_request_and_keeps_the_session(self) -> None:
+        stored = {**_session("s1", "u1", _runs(2)), "session_data": {"title": "kept"}}
+        storage = _write_storage(stored)
+
+        await StorageDb(storage=storage).keep_request(self._skeleton(), self._request())
+
+        data = storage.upsert.await_args.args[2]
+        assert [run["run_id"] for run in data["runs"]] == ["r0", "r1", "r1:request"]
+        assert data["session_data"] == {"title": "kept"}, "the stored session is extended, never replaced"
+
+    async def test_a_storage_failure_never_fails_the_run(self) -> None:
+        storage = _write_storage()
+        storage.upsert.side_effect = RuntimeError("storage down")
+
+        await StorageDb(storage=storage).keep_request(self._skeleton(), self._request())
+
+    async def test_a_completed_run_releases_its_request(self) -> None:
+        run = {"run_id": "r1", "agent_id": "a1", "session_id": "s1", "status": "COMPLETED"}
+        storage = _write_storage(_session("s1", None, [self._request(), run]))
+
+        await StorageDb(storage=storage).release_request("s1", "r1")
+
+        assert [r["run_id"] for r in storage.upsert.await_args.args[2]["runs"]] == ["r1"]
+
+    @pytest.mark.parametrize("status", ["ERROR", "CANCELLED", "PAUSED", None])
+    async def test_a_failed_paused_or_missing_run_keeps_its_request(self, status: str | None) -> None:
+        runs = [self._request()]
+        if status is not None:
+            runs.append({"run_id": "r1", "agent_id": "a1", "session_id": "s1", "status": status})
+        storage = _write_storage(_session("s1", None, runs))
+
+        await StorageDb(storage=storage).release_request("s1", "r1")
+
+        storage.upsert.assert_not_awaited()
+
+    async def test_the_save_of_the_run_keeps_the_request_without_warning(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Agno saves the session it loaded before the request was kept: the merge keeps the request."""
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        storage = _write_storage(_session("s1", None, [*_runs(1), self._request("r1")]))
+
+        with caplog.at_level(logging.WARNING, logger="digitalkin"):
+            await StorageDb(storage=storage).upsert_session(TestUpsertSession._session_object(_runs(2)))
+
+        assert [r["run_id"] for r in storage.upsert.await_args.args[2]["runs"]] == ["r0", "r1:request", "r1"]
+        assert not [r for r in caplog.records if "kept" in r.getMessage()]

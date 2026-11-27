@@ -12,6 +12,7 @@ from google.protobuf import json_format
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.logger import logger
 from digitalkin.models.module.loaded_tools import LoadedToolStore
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.settings.module import get_module_settings
@@ -539,6 +540,9 @@ class ModuleContext:
                 metadata=grpc_metadata,
             ):
                 frame = json_format.MessageToDict(output_proto)
+                failure = ModuleCodeModel.failure_text(frame)
+                if failure is not None:
+                    raise ToolCallError(failure)
                 root = frame.get("root")
                 # A fatal stream.error (e.g. SETUP_ACCESS_DENIED) must abort the tool call,
                 # not surface as a benign result — otherwise the parent run never terminates.

@@ -40,7 +40,7 @@ class ServerSettings(BaseSettings):
         description="Maximum number of RPCs handled in parallel by the server. Defaults to cpu_count * 200.",
         json_schema_extra={"env_example": ""},
     )
-    max_workers: NonNegativeInt = Field(10, description="Maximum number of workers for sync mode")
+    max_workers: NonNegativeInt = Field(default=10, description="Maximum number of workers for sync mode")
     thread_pool_workers: NonNegativeInt = Field(
         min(4, os.cpu_count() or 1),
         description="Number of workers in the server thread pool. Defaults to min(4, cpu_count).",

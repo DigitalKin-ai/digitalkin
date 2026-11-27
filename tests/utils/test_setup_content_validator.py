@@ -59,3 +59,36 @@ class TestRejectOversizedDocumentation:
 
     def test_empty_documentation_is_a_no_op(self) -> None:
         SetupContentValidator.reject_oversized_documentation("")
+
+
+class TestRejectEscapedText:
+    """A text whose line breaks and accents were written as escape sequences is refused, not stored."""
+
+    def test_refuses_unicode_escapes_written_out(self) -> None:
+        with pytest.raises(ValueError, match="escape sequences"):
+            SetupContentValidator.reject_escaped_text("Installation physique et c\\u00e2blage")
+
+    def test_refuses_line_breaks_written_out(self) -> None:
+        with pytest.raises(ValueError, match="escape sequences"):
+            SetupContentValidator.reject_escaped_text("\\n\\nChapter 2: wiring")
+
+    def test_names_the_path_of_a_nested_text(self) -> None:
+        with pytest.raises(ValueError, match=r"'a\[0\]\.b'"):
+            SetupContentValidator.reject_escaped_text({"a": [{"b": "caf\\u00e9"}]})
+
+    def test_accepts_real_line_breaks_and_accents(self) -> None:
+        text = "Première ligne.\nDeuxième ligne : « été »."
+        assert SetupContentValidator.reject_escaped_text(text) is text
+
+    def test_accepts_a_single_backslash_n_in_one_ascii_line(self) -> None:
+        r"""A Windows path or a short regex holds one ``\\n`` on purpose."""
+        assert SetupContentValidator.reject_escaped_text("C:\\new\\folder") == "C:\\new\\folder"
+
+    def test_accepts_written_out_escapes_beside_a_real_line_break(self) -> None:
+        r"""Code that prints a newline keeps its ``\\n`` and has real lines too."""
+        code = "print('a\\n')\nprint('b\\n')"
+        assert SetupContentValidator.reject_escaped_text(code) == code
+
+    def test_ignores_non_text_values(self) -> None:
+        content = {"n": 3, "flag": True, "items": [1.5, None]}
+        assert SetupContentValidator.reject_escaped_text(content) is content

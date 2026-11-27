@@ -88,8 +88,8 @@ class ClientCredentials(BaseModel):
     """
 
     root_cert_path: Path = Field(..., description="Path to the root certificate")
-    client_key_path: Path | None = Field(None, description="Path to the client private key | mTLS enable")
-    client_cert_path: Path | None = Field(None, description="Path to the client certificate | mTLS enable")
+    client_key_path: Path | None = Field(default=None, description="Path to the client private key | mTLS enable")
+    client_cert_path: Path | None = Field(default=None, description="Path to the client certificate | mTLS enable")
 
     # Enable __slots__ for memory efficiency
     model_config = {
@@ -131,12 +131,12 @@ class ChannelConfig(BaseModel):
     """
 
     host: str = Field(
-        "0.0.0.0",  # ruff: ignore[hardcoded-bind-all-interfaces]
+        default="0.0.0.0",  # ruff: ignore[hardcoded-bind-all-interfaces]
         description="Host address to bind the client to",
     )  # Bind to all interfaces by design
-    port: int = Field(50051, description="Port to listen on")
-    mode: ControlFlow = Field(ControlFlow.SYNC, description="Client operation mode (sync/async)")
-    security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
+    port: int = Field(default=50051, description="Port to listen on")
+    mode: ControlFlow = Field(default=ControlFlow.SYNC, description="Client operation mode (sync/async)")
+    security: SecurityMode = Field(default=SecurityMode.INSECURE, description="Security mode (secure/insecure)")
 
     # Enable __slots__ for memory efficiency
     model_config = {
@@ -205,7 +205,7 @@ class ClientConfig(ChannelConfig):
         default_factory=lambda: get_client_settings().channel.security,
         description="Security mode (secure/insecure)",
     )
-    credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
+    credentials: ClientCredentials | None = Field(default=None, description="Client credentials for secure mode")
     retry_policy: RetryPolicy = Field(
         default_factory=RetryPolicy.from_settings, description="Retry policy for failed RPCs"
     )

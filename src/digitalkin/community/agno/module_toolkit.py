@@ -27,6 +27,7 @@ from digitalkin.logger import logger
 from digitalkin.models.events import SourceCitation, ToolInfo
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 from digitalkin.services.communication.exceptions import ToolCallError
 
@@ -431,6 +432,11 @@ class ModuleToolkit(DkToolkit):
         default_error = "No successful response received from module"
         if frame is None:
             return default_error
+        failure = ModuleCodeModel.failure_text(frame)
+        if failure is not None:
+            # TODO(validate): TOOL-FAILURE-TEXT the calling agent reads a raising tool's message, not the default
+            logger.info("[VALIDATE TOOL-FAILURE-TEXT] tool failure reaches the agent: %s", failure)
+            return failure
         root = frame.get("root")
         if isinstance(root, dict):
             protocol = root.get("protocol")
@@ -442,9 +448,7 @@ class ModuleToolkit(DkToolkit):
                 return f"[{code}] {message}" if code else str(message)
             if root.get("error"):
                 return str(root["error"])
-        if isinstance(frame.get("error"), str):
-            return str(frame["error"])
-        return default_error
+        return str(frame["error"]) if isinstance(frame.get("error"), str) else default_error
 
     @staticmethod
     async def _drain(
@@ -454,8 +458,10 @@ class ModuleToolkit(DkToolkit):
         """Drain a tool stream, keeping only the last domain frame and the last error frame.
 
         Each frame is the ``MessageToDict`` of one output Struct (``{"root": {"protocol": ...}}``).
-        Custom events are relayed as they arrive. A ``stream.error``/``stream.cancelled``
-        outranks a bare ``error`` field.
+        Custom events and activity snapshots are relayed as they arrive and are never the result
+        of a tool that streams a domain frame or an error: the first one is the result only when
+        the tool streams nothing else. A ``stream.error``/``stream.cancelled`` outranks a bare
+        ``error`` field.
 
         Args:
             context: The agent's module context, for relaying custom events.
@@ -466,6 +472,7 @@ class ModuleToolkit(DkToolkit):
         """
         last_success: dict[str, Any] | None = None
         last_error: dict[str, Any] | None = None
+        relayed: dict[str, Any] | None = None
         sentinel_error_seen = False
         frames = 0
         async for response in stream:
@@ -473,16 +480,27 @@ class ModuleToolkit(DkToolkit):
             await ModuleToolkit._relay_custom_event(context, response)
             root = response.get("root")
             protocol = root.get("protocol", "") if isinstance(root, dict) else ""
-            if protocol in {"stream.error", "stream.cancelled"}:
+            if protocol in {"stream.error", "stream.cancelled"} or (
+                root is None and isinstance(response.get("code"), str)
+            ):
                 last_error = response
                 sentinel_error_seen = True
+            elif protocol in {"agui_custom", "agui_activity_snapshot"}:
+                # Already relayed to the front: the result only if the tool sends nothing else.
+                relayed = relayed or response
             elif isinstance(root, dict) and protocol not in {"stream.start", "stream.end", "stream.init"}:
                 last_success = response
             elif not sentinel_error_seen and (
                 isinstance(response.get("error"), str) or (isinstance(root, dict) and root.get("error"))
             ):
                 last_error = response
-        return last_success, last_error, frames
+        if relayed is not None and (last_success is not None or last_error is not None):
+            # TODO(validate): RELAYED-NOT-RESULT a tool's output or error reaches the agent, not its relayed event
+            logger.info(
+                "[VALIDATE RELAYED-NOT-RESULT] Relayed %s kept out of the tool result",
+                relayed["root"].get("protocol"),
+            )
+        return last_success or (relayed if last_error is None else None), last_error, frames
 
     @staticmethod
     def _unwrap_kwargs(

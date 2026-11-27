@@ -4,8 +4,9 @@ import datetime as dt
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
+from digitalkin.logger import logger
 from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.models.services.storage import Visibility
 
@@ -32,6 +33,30 @@ class SetupVersionData(BaseModel):
     content: dict[str, Any]
     structure: dict[str, str] | None = None
     creation_date: dt.datetime = Field(validation_alias=AliasChoices("creation_date", "created_at"))
+
+    @field_validator("content")
+    @classmethod
+    def _whole_numbers_are_int(cls, content: dict[str, Any]) -> dict[str, Any]:
+        """Read a whole number of the content back as int, in place.
+
+        The wire carries the content as a protobuf Struct, which holds every number as a double: a
+        stored ``1`` arrives as ``1.0``. A whole number within 2**53, where a double still holds every
+        integer exactly, is turned back into an int; any other number stays a float.
+
+        Returns:
+            The content, its whole numbers as int.
+        """
+        stack: list[dict[str, Any] | list[Any]] = [content]
+        while stack:
+            node = stack.pop()
+            for key, value in node.items() if isinstance(node, dict) else enumerate(node):
+                if isinstance(value, float) and value.is_integer() and abs(value) <= 2**53:
+                    node[key] = int(value)  # type: ignore[index]
+                elif isinstance(value, dict | list):
+                    stack.append(value)
+        # TODO(validate): SETUP-INT-ROUNDTRIP whole numbers of a setup's content read back as int, not float
+        logger.debug("[VALIDATE SETUP-INT-ROUNDTRIP] setup content read with whole numbers as int")
+        return content
 
 
 class SetupVersionPage(BaseModel):

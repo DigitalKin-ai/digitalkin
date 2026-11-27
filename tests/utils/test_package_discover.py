@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -18,8 +19,8 @@ sys.modules["digitalkin.modules.trigger_handler"] = _fake_trigger_mod
 # Stub base_module to prevent import cycles (if referenced)
 sys.modules.setdefault("digitalkin.modules._base_module", types.ModuleType("digitalkin.modules._base_module"))
 
-from digitalkin.utils.exceptions import DiscoveryError, UnsafePackageError  # noqa: E402
-from digitalkin.utils.package_discover import ModuleDiscoverer  # noqa: E402
+from digitalkin.utils.exceptions import DiscoveryError, UnsafePackageError  # ruff: ignore[module-import-not-at-top-of-file]
+from digitalkin.utils.package_discover import ModuleDiscoverer  # ruff: ignore[module-import-not-at-top-of-file]
 
 # Helper to create Python files
 
@@ -27,6 +28,21 @@ from digitalkin.utils.package_discover import ModuleDiscoverer  # noqa: E402
 def write_file(path: Path, content: str = ""):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _forget_test_packages() -> Iterator[None]:
+    """Each test builds its own ``pkg`` under tmp_path: drop the one a previous test imported.
+
+    Without it, a process running two of these tests (pytest-xdist) resolves ``pkg`` from
+    ``sys.modules`` to the previous test's directory.
+    """
+    path = list(sys.path)
+    yield
+    sys.path[:] = path
+    for name in [name for name in sys.modules if name == "pkg" or name.startswith("pkg.")]:
+        del sys.modules[name]
+    importlib.invalidate_caches()
 
 
 def test_validate_inputs_empty_packages():
@@ -66,7 +82,7 @@ def test_is_safe_module_name():
 
 
 def test_module_file_path():
-    base = Path("/tmp/pkg")  # noqa: S108
+    base = Path("/tmp/pkg")  # ruff: ignore[hardcoded-temp-file]
     path = ModuleDiscoverer._module_file_path("pkg.sub.mod", base, "pkg")
     assert path == base / "sub/mod.py"
 
@@ -142,7 +158,7 @@ def test_discover_modules_integration(tmp_path):
 
 def test_discover_invalid_package_import(monkeypatch):
     md = ModuleDiscoverer(packages=["nonexistent_pkg"], file_pattern="*.py")
-    monkeypatch.setattr(importlib, "import_module", lambda name: (_ for _ in ()).throw(ImportError()))  # noqa: ARG005
+    monkeypatch.setattr(importlib, "import_module", lambda name: (_ for _ in ()).throw(ImportError()))  # ruff: ignore[unused-lambda-argument]
     results = md.discover_modules()
     assert results == {}
 
@@ -196,7 +212,10 @@ def test_large_file_skipped(tmp_path):
 
     md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py", max_file_size=1024)
     results = md.discover_modules()
-    assert "pkg.big_trigger" not in results
+    # Refused for its size, never imported. It passed as "not in results" only while a previous
+    # test's ``pkg`` stood in sys.modules, so this file was never walked.
+    assert results["pkg.big_trigger"] is False
+    assert "pkg.big_trigger" not in sys.modules
 
     sys.path.pop(0)
 
@@ -205,11 +224,11 @@ def test_large_file_skipped(tmp_path):
 # init_handlers / get_trigger unit tests
 # ---------------------------------------------------------------------------
 
-from unittest.mock import Mock  # noqa: E402
+from unittest.mock import Mock  # ruff: ignore[module-import-not-at-top-of-file]
 
 
-@pytest.fixture()
-def _clean_trigger_registry():
+@pytest.fixture
+def _clean_trigger_registry() -> Iterator[None]:
     """Save and restore _trigger_handlers_cls to avoid cross-test leaks."""
     original = dict(ModuleDiscoverer._trigger_handlers_cls)
     ModuleDiscoverer._trigger_handlers_cls = {}
@@ -235,7 +254,7 @@ class _HandlerAlpha:
     protocol = "alpha"
     input_format = _FakeInput
 
-    def __init__(self, context):
+    def __init__(self, context) -> None:
         self.context = context
 
 
@@ -245,7 +264,7 @@ class _HandlerBeta:
     protocol = "beta"
     input_format = _FakeInputBeta
 
-    def __init__(self, context):
+    def __init__(self, context) -> None:
         self.context = context
 
 

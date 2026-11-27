@@ -325,6 +325,8 @@ class StorageDb(AsyncBaseDb):
     ) -> Session | dict[str, Any] | None:
         """Write a session, its runs merged into the stored ones, after cutting its old tool results.
 
+        An assistant message with no text and no tool call is not stored: a request drops it anyway.
+
         The stored session is read again under a process-wide per-session lock and the runs are
         merged by ``run_id``: a session Agno rebuilt with fewer runs, or a
         concurrent turn's save, never drops a stored run. Every tool result older than the five most
@@ -344,12 +346,8 @@ class StorageDb(AsyncBaseDb):
             logger.error("upsert_session: session_id is required")
             return None
         data["session_id"] = session_id
-        key = f"{self.storage.mission_id}|{self.sessions_collection}:{session_id}"
-        lock = self._session_locks.get(key)
-        if lock is None:
-            lock = self._session_locks[key] = asyncio.Lock()
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            async with lock:
+            async with self._lock(session_id):
                 stored = await self.storage.read(self.sessions_collection, session_id)
                 runs = (stored.data.model_dump().get("runs") or []) if stored is not None else []
                 # Merge by run_id: a stored run the save lacks stays in place, an incoming run replaces
@@ -357,7 +355,12 @@ class StorageDb(AsyncBaseDb):
                 positions = {run.get("run_id"): i for i, run in enumerate(runs) if run.get("run_id")}
                 incoming = data.get("runs") or []
                 incoming_ids = {run.get("run_id") for run in incoming}
-                kept = [run.get("run_id") for run in runs if run.get("run_id") not in incoming_ids]
+                # A kept request (``keep_request``) is stored after Agno loaded the session: expected, not lost.
+                kept = [
+                    run.get("run_id")
+                    for run in runs
+                    if run.get("run_id") not in incoming_ids and not str(run.get("run_id")).endswith(":request")
+                ]
                 for run in incoming:
                     position = positions.get(run.get("run_id")) if run.get("run_id") else None
                     if position is None:
@@ -373,6 +376,24 @@ class StorageDb(AsyncBaseDb):
                         kept,
                     )
                 data["runs"] = runs
+                # An assistant turn with no text and no tool call is dropped from every request anyway.
+                empty = [
+                    (run, msg)
+                    for run in runs
+                    for msg in run.get("messages") or []
+                    if msg.get("role") == "assistant"
+                    and not msg.get("tool_calls")
+                    and isinstance(msg.get("content"), str)
+                    and not msg["content"].strip()
+                ]
+                for run, msg in empty:
+                    run["messages"].remove(msg)
+                    logger.info(
+                        "Session %s: Empty assistant message not stored (run %s): %.100r",
+                        session_id,
+                        run.get("run_id"),
+                        msg,
+                    )
                 seen = 0
                 for run in reversed(runs):
                     for msg in reversed(run.get("messages") or []):
@@ -407,6 +428,76 @@ class StorageDb(AsyncBaseDb):
             return None
         logger.debug("Session %s saved with %d runs", session_id, len(data["runs"]))
         return session if deserialize else data
+
+    def _lock(self, session_id: str) -> asyncio.Lock:
+        """Return the process-wide lock of one stored session.
+
+        Args:
+            session_id: The session about to be read and rewritten.
+
+        Returns:
+            The session's lock, created on first use.
+        """
+        key = f"{self.storage.mission_id}|{self.sessions_collection}:{session_id}"
+        lock = self._session_locks.get(key)
+        if lock is None:
+            lock = self._session_locks[key] = asyncio.Lock()
+        return lock
+
+    async def keep_request(self, session: dict[str, Any], run: dict[str, Any]) -> None:
+        """Store a run holding only the user's request while the real run is under way.
+
+        Agno saves a run only when it ends, and leaves an errored or cancelled run out of the history:
+        a run cut by a timeout, a cancel or a crash took the request with it, and a retry in the
+        mission found no history. The request run is appended to the stored session (``session`` is
+        stored when none is yet) and stays there unless :meth:`release_request` finds the real run
+        ended normally. A failure is logged and never fails the run.
+
+        Args:
+            session: The session to store when none is: its id, type and owner, no runs.
+            run: The request run: ``<run_id>:request``, status ``COMPLETED``, the user message only.
+        """
+        session_id = session["session_id"]
+        try:
+            async with self._lock(session_id):
+                stored = await self.storage.read(self.sessions_collection, session_id)
+                data = stored.data.model_dump() if stored is not None else session
+                data["runs"] = [*(data.get("runs") or []), run]
+                await self.storage.upsert(self.sessions_collection, session_id, data)
+        except Exception:
+            logger.exception("Session %s: keeping the request %s failed", session_id, run.get("run_id"))
+            return
+        # TODO(validate): KEPT-REQUEST a run cut (timeout, cancel, crash) or left paused keeps its request
+        logger.info("[VALIDATE KEPT-REQUEST] Session %s: request %s kept", session_id, run.get("run_id"))
+
+    async def release_request(self, session_id: str, run_id: str) -> None:
+        """Drop the request run of ``run_id`` once the run itself is stored as completed.
+
+        Its own messages then hold the request. An errored, cancelled, paused or unsaved run keeps it:
+        Agno leaves a paused run out of the history, and a pause may never be continued. A failure is
+        logged and never fails the run.
+
+        Args:
+            session_id: The session holding both runs.
+            run_id: The real run, whose request run is ``<run_id>:request``.
+        """
+        try:  # ruff: ignore[too-many-statements-in-try-clause] - one read-modify-write under the session lock
+            async with self._lock(session_id):
+                stored = await self.storage.read(self.sessions_collection, session_id)
+                runs = (stored.data.model_dump().get("runs") or []) if stored is not None else []
+                status = next((run.get("status") for run in runs if run.get("run_id") == run_id), None)
+                if status != RunStatus.completed.value:
+                    (logger.info if status == RunStatus.paused.value else logger.warning)(
+                        "Session %s: run %s ended %s, its request stays in the history", session_id, run_id, status
+                    )
+                    return
+                data = stored.data.model_dump()  # type: ignore[union-attr]
+                data["runs"] = [run for run in runs if run.get("run_id") != f"{run_id}:request"]
+                await self.storage.upsert(self.sessions_collection, session_id, data)
+        except Exception:
+            logger.exception("Session %s: releasing the request of run %s failed", session_id, run_id)
+            return
+        logger.info("Session %s: run %s ended %s, its request released", session_id, run_id, status)
 
     # --- Compaction ---
     async def get_compaction_record(self, session_id: str) -> dict[str, Any] | None:

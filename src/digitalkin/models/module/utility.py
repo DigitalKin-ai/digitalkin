@@ -20,6 +20,15 @@ class UtilityProtocol(DataTrigger):
     - Consistent behavior across the SDK
     """
 
+    @classmethod
+    def protocols(cls) -> set[str]:
+        """Name the SDK utility protocols (``stream.*``, ``healthcheck_*``), which never reach a model.
+
+        Returns:
+            The ``protocol`` value of every utility input and output.
+        """
+        return {sub.model_fields["protocol"].default for sub in cls.__subclasses__()}
+
 
 class EndOfStreamOutput(UtilityProtocol):
     """Signal that the stream has ended."""

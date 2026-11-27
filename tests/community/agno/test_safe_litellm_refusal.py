@@ -34,10 +34,12 @@ class _FakeClient:
 
     async def acompletion(self, **_: Any) -> AsyncIterator[ModelResponseStream]:
         self.calls += 1
+        self.exhausted = False
 
         async def stream() -> AsyncIterator[ModelResponseStream]:
             for chunk in self.chunks:
                 yield chunk
+            self.exhausted = True
 
         return stream()
 
@@ -75,6 +77,23 @@ class TestStreamingRefusal:
         events, _ = await _run([_chunk(content="Je vais"), _chunk(finish_reason="content_filter")])
 
         assert any(event.event == RunEvent.run_error for event in events)
+
+    @pytest.mark.regression
+    @pytest.mark.asyncio
+    async def test_the_stream_is_read_to_its_end_before_the_refusal_is_raised(self):
+        """Raising mid-stream left litellm's response open: "Unclosed client session" after a refusal (DEV-978)."""
+        events, client = await _run([
+            _chunk(content=""),
+            _chunk(finish_reason="content_filter"),
+            _chunk(content=None),
+        ])
+
+        assert client.exhausted, "the stream is consumed, so litellm closes its response"
+        errors = [event for event in events if event.event == RunEvent.run_error]
+        assert len(errors) == 1
+        assert errors[0].error_type == "MODEL_CONTENT_FILTERED"
+        assert "content filter" in errors[0].content
+        assert client.calls == 1
 
     @pytest.mark.asyncio
     async def test_normal_completion_is_untouched(self):
